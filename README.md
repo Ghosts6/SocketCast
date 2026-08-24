@@ -7,7 +7,7 @@
 ![Docker](https://img.shields.io/badge/Docker-Kubernetes-2496ED.svg)
 ![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)
 
-> **Status:** 🚧  early development (Phase 0/1 — see [Roadmap](#project-roadmap)). Not yet functional end-to-end. This note comes down once the core transport (Phases 0–4) is working.
+> **Status:** 🚧  early development (Phase 0/1 - see [Roadmap](#project-roadmap)). Not yet functional end-to-end. This note comes down once the core transport (Phases 0–4) is working.
 
 A custom reliable-UDP transport protocol designed and built from scratch for real-time video streaming.
 
@@ -15,7 +15,7 @@ Unlike streaming projects that wrap an existing transport (WebRTC, gStreamer, pl
 
 ## System Architecture
 
-Decoupled layers separate the high-performance network I/O from the control plane and the web UI. Note the two distinct client paths — this split exists because **browsers cannot open raw UDP sockets**, so only the native client speaks the protocol directly; the browser is bridged.
+Decoupled layers separate the high-performance network I/O from the control plane and the web UI. Note the two distinct client paths - this split exists because **browsers cannot open raw UDP sockets**, so only the native client speaks the protocol directly; the browser is bridged.
 
 ```mermaid
 graph TD
@@ -53,7 +53,7 @@ graph TD
 
 ## Core Protocol Features
 
-*(Design targets for Phases 0–2 — see [Doc/dev/02-protocol-spec.md](Doc/dev/02-protocol-spec.md) for the full spec.)*
+*(Design targets for Phases 0–2 - see [Doc/dev/02-protocol-spec.md](Doc/dev/02-protocol-spec.md) for the full spec.)*
 
 ### 1. Deadline-Based Loss Recovery
 Not every packet is worth recovering. The protocol computes the exact time a lost packet is needed for playback; if the round trip needed for a NACK + retransmit would exceed that deadline, the packet is intentionally dropped in favor of decoder concealment, rather than retransmitting into a latency cascade.
@@ -62,22 +62,22 @@ Not every packet is worth recovering. The protocol computes the exact time a los
 A custom UDP packet header carries sequence numbers, timestamps, and frame-priority flags (keyframe vs. P-frame vs. audio). NACK-based selective-repeat ARQ keeps data flowing continuously, rather than naive stop-and-wait.
 
 ### 3. Dynamic RTO (Jacobson's Algorithm)
-No hardcoded timeouts. RTT is sampled continuously and the retransmission timeout adapts to current network stability — the same mechanism TCP uses internally.
+No hardcoded timeouts. RTT is sampled continuously and the retransmission timeout adapts to current network stability - the same mechanism TCP uses internally.
 
 ### 4. Adaptive Rate Control
 Loss rate and RTT trend are monitored together to detect congestion *before* severe packet loss hits (a rising RTT signals a building queue), triggering an ABR downgrade to a lower bitrate tier to protect smoothness over resolution.
 
 ## Tech Stack
 
-* **Layer 1 — Transport & Networking:** C++17, epoll (io_uring as a later, benchmarked port), raw UDP sockets.
-* **Layer 2 — Media:** FFmpeg / libav, NAL-unit parsing for frame classification.
-* **Layer 3 — Control Plane:** Python, FastAPI, Redis. C++/Python boundary (pybind11 vs. separate-process IPC) — see [Doc/dev/04-architecture-and-tech-decisions.md](Doc/dev/04-architecture-and-tech-decisions.md).
-* **Layer 4 — Interface:** React, TypeScript, Tailwind CSS.
-* **Layer 5 — Infrastructure:** Docker (multi-stage builds), Kubernetes, `tc netem` for network-condition testing, libFuzzer for parser hardening.
+* **Layer 1 - Transport & Networking:** C++17, epoll (io_uring as a later, benchmarked port), raw UDP sockets.
+* **Layer 2 - Media:** FFmpeg / libav, NAL-unit parsing for frame classification.
+* **Layer 3 - Control Plane:** Python, FastAPI, Redis. C++/Python boundary (pybind11 vs. separate-process IPC) - see [Doc/dev/04-architecture-and-tech-decisions.md](Doc/dev/04-architecture-and-tech-decisions.md).
+* **Layer 4 - Interface:** React, TypeScript, Tailwind CSS.
+* **Layer 5 - Infrastructure:** Docker (multi-stage builds), Kubernetes, `tc netem` for network-condition testing, libFuzzer for parser hardening.
 
 ## Getting Started (Development)
 
-Prerequisites: Docker, Docker Compose, a C++17 compiler + CMake (for the native client, which is not containerized — see below).
+Prerequisites: Docker, Docker Compose, a C++17 compiler + CMake (for the native client, which is not containerized - see below).
 
 ```bash
 git clone https://github.com/kiarashbashokian/SocketCast.git
@@ -88,7 +88,7 @@ docker-compose build
 docker-compose up -d
 ```
 
-**Native client** (speaks the protocol directly — intentionally not dockerized, it's a GUI app):
+**Native client** (speaks the protocol directly - intentionally not dockerized, it's a GUI app):
 ```bash
 cmake -S client -B client/build
 cmake --build client/build
@@ -104,21 +104,21 @@ sudo ./scripts/netem-reset.sh       # remove
 ## Documentation
 
 Design docs live in [`Doc/dev/`](Doc/dev/):
-- [01-project-overview.md](Doc/dev/01-project-overview.md) — pitch, architecture summary, scope boundary
-- [02-protocol-spec.md](Doc/dev/02-protocol-spec.md) — packet format, retransmission logic, RTO, jitter buffer, rate control
-- [03-roadmap-and-scope.md](Doc/dev/03-roadmap-and-scope.md) — the full phase-by-phase build plan
-- [04-architecture-and-tech-decisions.md](Doc/dev/04-architecture-and-tech-decisions.md) — client architecture, concurrency model, security, observability
+- [01-project-overview.md](Doc/dev/01-project-overview.md) - pitch, architecture summary, scope boundary
+- [02-protocol-spec.md](Doc/dev/02-protocol-spec.md) - packet format, retransmission logic, RTO, jitter buffer, rate control
+- [03-roadmap-and-scope.md](Doc/dev/03-roadmap-and-scope.md) - the full phase-by-phase build plan
+- [04-architecture-and-tech-decisions.md](Doc/dev/04-architecture-and-tech-decisions.md) - client architecture, concurrency model, security, observability
 
 ## Project Roadmap
 
-**Core (Phases 0–4)** — the transport protocol proven end-to-end:
+**Core (Phases 0–4)** - the transport protocol proven end-to-end:
 - [ ] Phase 0: Protocol specification (header layout, state machine, ACK/NACK, retransmit-deadline formula)
 - [ ] Phase 1: Bare C++ transport engine (epoll, raw UDP, basic ACK/NACK)
 - [ ] Phase 2: Reliability & rate control (selective-repeat ARQ, jitter buffer, token-bucket + RTT-trend backoff)
 - [ ] Phase 3: Media integration (FFmpeg chunking, NAL-unit frame classification)
 - [ ] Phase 4: Native client (SDL2/OpenCV playback, speaks the protocol directly)
 
-**Extended (Phases 5–8)** — production-shaped polish:
+**Extended (Phases 5–8)** - production-shaped polish:
 - [ ] Phase 5: Python control plane (FastAPI, Redis session state, WebSocket bridge)
 - [ ] Phase 6: Web dashboard (React/TS/Tailwind, control plane + bridged video plane)
 - [ ] Phase 7: Containerization & Kubernetes (UDP service routing, HPA)
@@ -126,7 +126,7 @@ Design docs live in [`Doc/dev/`](Doc/dev/):
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+MIT - see [LICENSE](LICENSE).
 
 ## Author
 
