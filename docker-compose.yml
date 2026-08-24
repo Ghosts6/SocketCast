@@ -1,0 +1,39 @@
+services:
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+
+  engine:
+    build:
+      context: ./engine
+    ports:
+      - "5000:5000/udp"
+      - "9100:9100"   # metrics (Phase 8)
+    # TODO(Phase 5): expose engine's control channel here once it exists,
+    # and point control-plane's ENGINE_HOST/ENGINE_CONTROL_PORT at it.
+
+  control-plane:
+    build:
+      context: ./control-plane
+    env_file:
+      - ./control-plane/.env.example
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+      - ENGINE_HOST=engine
+    ports:
+      - "8000:8000"
+    depends_on:
+      - redis
+      - engine
+
+  dashboard:
+    build:
+      context: ./dashboard
+    ports:
+      - "5173:80"
+    depends_on:
+      - control-plane
+
+# TODO: add a docker-compose.override.yml (gitignored) for local-only
+# tweaks (bind mounts for hot reload, exposed debug ports, etc.).

@@ -1,0 +1,30 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dashboard
+  namespace: socketcast
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: dashboard }
+  template:
+    metadata:
+      labels: { app: dashboard }
+    spec:
+      containers:
+        - name: dashboard
+          image: socketcast/dashboard:latest
+          ports:
+            - containerPort: 80
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: dashboard
+  namespace: socketcast
+spec:
+  selector: { app: dashboard }
+  ports:
+    - port: 80
+      targetPort: 80
+  type: ClusterIP  # TODO: Ingress in front of this once it exists

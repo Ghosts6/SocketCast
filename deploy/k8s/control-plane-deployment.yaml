@@ -1,0 +1,42 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: control-plane
+  namespace: socketcast
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: control-plane }
+  template:
+    metadata:
+      labels: { app: control-plane }
+    spec:
+      containers:
+        - name: control-plane
+          image: socketcast/control-plane:latest
+          ports:
+            - containerPort: 8000
+          envFrom:
+            - configMapRef:
+                name: control-plane-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: control-plane
+  namespace: socketcast
+spec:
+  selector: { app: control-plane }
+  ports:
+    - port: 8000
+      targetPort: 8000
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: control-plane-config
+  namespace: socketcast
+data:
+  REDIS_URL: "redis://redis:6379/0"
+  ENGINE_HOST: "engine"
+  ENGINE_CONTROL_PORT: "5001"

@@ -1,0 +1,42 @@
+# TODO(Phase 7): decide replica strategy — one engine pod per active stream
+# region, or a shared pool. UDP load-balancing support varies by ingress/CNI;
+# document what you land on in Doc/dev once decided.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: engine
+  namespace: socketcast
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: engine }
+  template:
+    metadata:
+      labels: { app: engine }
+    spec:
+      containers:
+        - name: engine
+          image: socketcast/engine:latest
+          ports:
+            - containerPort: 5000
+              protocol: UDP
+            - containerPort: 9100
+              protocol: TCP  # metrics (Phase 8)
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: engine
+  namespace: socketcast
+spec:
+  selector: { app: engine }
+  ports:
+    - name: media
+      port: 5000
+      protocol: UDP
+      targetPort: 5000
+    - name: metrics
+      port: 9100
+      protocol: TCP
+      targetPort: 9100
+  type: ClusterIP  # TODO: LoadBalancer/NodePort once UDP routing is validated

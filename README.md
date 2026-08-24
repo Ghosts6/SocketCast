@@ -5,24 +5,28 @@
 ![FastAPI](https://img.shields.io/badge/FastAPI-0.100+-green.svg)
 ![React](https://img.shields.io/badge/React-TypeScript-61DAFB.svg)
 ![Docker](https://img.shields.io/badge/Docker-Kubernetes-2496ED.svg)
+![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)
 
-A high-performance, custom reliable-UDP transport protocol engineered for real-time video streaming. 
+> **Status:** 🚧  early development (Phase 0/1 — see [Roadmap](#project-roadmap)). Not yet functional end-to-end. This note comes down once the core transport (Phases 0–4) is working.
 
-Unlike standard streaming projects that rely on existing transport libraries (like WebRTC, gStreamer, or standard TCP), this project implements the transport layer from scratch. It features custom packet structures, selective-repeat ARQ, deadline-based retransmission, and congestion control to prioritize media delivery under volatile network conditions.
+A custom reliable-UDP transport protocol designed and built from scratch for real-time video streaming.
+
+Unlike streaming projects that wrap an existing transport (WebRTC, gStreamer, plain TCP), this project implements the transport layer itself: custom packet structures, selective-repeat ARQ, deadline-based retransmission, and congestion-aware rate control, purpose-built to prioritize media delivery under lossy, volatile network conditions.
 
 ## System Architecture
 
-The architecture is divided into decoupled layers, separating the high-performance network I/O from the control plane and frontend UI.
+Decoupled layers separate the high-performance network I/O from the control plane and the web UI. Note the two distinct client paths — this split exists because **browsers cannot open raw UDP sockets**, so only the native client speaks the protocol directly; the browser is bridged.
 
 ```mermaid
 graph TD
-    subgraph Frontend [Web Plane]
+    subgraph Frontend [Web Plane - Browser]
         UI[React / TypeScript / Tailwind]
     end
 
-    subgraph ControlPlane [Python API Layer]
+    subgraph ControlPlane [Python Control Plane]
         API[FastAPI Service]
-        Redis[(Redis State/Metrics)]
+        Bridge[WebSocket Bridge]
+        Redis[(Redis - state / rate limits)]
         API <--> Redis
     end
 
@@ -30,7 +34,7 @@ graph TD
         UDP[Raw UDP Sockets + epoll]
         Jitter[Jitter Buffer]
         ARQ[Selective-Repeat ARQ]
-        RTO[Dynamic RTO / Jacobson's]
+        RTO[Dynamic RTO - Jacobson's]
         UDP --- Jitter --- ARQ --- RTO
     end
 
@@ -38,84 +42,91 @@ graph TD
         FFmpeg[FFmpeg / libav]
     end
 
-    FFmpeg -->|Encodes| TransportEngine
-    TransportEngine <-->|gRPC / pybind11| ControlPlane
-    ControlPlane <-->|WebSockets/HTTP| UI
-    TransportEngine <-->|Custom UDP| Client[Native Client / Bridge]
+    NativeClient[Native Client - SDL2/OpenCV]
 
+    FFmpeg -->|encodes into custom packets| TransportEngine
+    TransportEngine <-->|custom UDP protocol, direct| NativeClient
+    TransportEngine <-->|local IPC + metrics| ControlPlane
+    Bridge <-->|proxies frames| TransportEngine
+    ControlPlane <-->|REST / WebSocket| UI
 ```
 
 ## Core Protocol Features
 
-### 1. Deadline-Based Loss Recovery
+*(Design targets for Phases 0–2 — see [Doc/dev/02-protocol-spec.md](Doc/dev/02-protocol-spec.md) for the full spec.)*
 
-Not all packets are created equal. The protocol calculates the exact time a lost packet is needed for playback. If the estimated Round Trip Time (RTT) for a NACK and retransmission exceeds the playback deadline, the packet is intentionally dropped to prevent latency cascading, relying on decoder concealment instead.
+### 1. Deadline-Based Loss Recovery
+Not every packet is worth recovering. The protocol computes the exact time a lost packet is needed for playback; if the round trip needed for a NACK + retransmit would exceed that deadline, the packet is intentionally dropped in favor of decoder concealment, rather than retransmitting into a latency cascade.
 
 ### 2. Selective-Repeat ARQ & Custom Headers
-
-Implements a custom UDP packet header including sequence numbers, timestamps, and frame priority flags (Keyframe vs. P-frame). Uses NACK-based Selective-Repeat ARQ rather than naive Stop-and-Wait, allowing continuous data flow.
+A custom UDP packet header carries sequence numbers, timestamps, and frame-priority flags (keyframe vs. P-frame vs. audio). NACK-based selective-repeat ARQ keeps data flowing continuously, rather than naive stop-and-wait.
 
 ### 3. Dynamic RTO (Jacobson's Algorithm)
-
-Timeout calculations are not hardcoded. The protocol continuously samples RTT and calculates variation, adapting the Retransmission Timeout (RTO) dynamically to match current network stability (similar to TCP's internal mechanics).
+No hardcoded timeouts. RTT is sampled continuously and the retransmission timeout adapts to current network stability — the same mechanism TCP uses internally.
 
 ### 4. Adaptive Rate Control
-
-Monitors sustained loss rates and RTT trends to detect network congestion before severe packet drop occurs. Signals the media layer to switch to lower bitrate tiers to maintain smooth playback.
+Loss rate and RTT trend are monitored together to detect congestion *before* severe packet loss hits (a rising RTT signals a building queue), triggering an ABR downgrade to a lower bitrate tier to protect smoothness over resolution.
 
 ## Tech Stack
 
-* **Layer 1 (Transport & Networking):** C++, epoll / io_uring for async I/O, Raw UDP Sockets.
-* **Layer 2 (Media):** FFmpeg / libav.
-* **Layer 3 (Control Plane):** Python, FastAPI, Pybind11 (C++ bindings), Redis.
-* **Layer 4 (Interface):** React, TypeScript, Tailwind CSS.
-* **Layer 5 (Infrastructure):** Docker (Multi-stage builds), Kubernetes (Deployments, DaemonSets, UDP Load Balancing), Linux tc netem (for network simulation).
+* **Layer 1 — Transport & Networking:** C++17, epoll (io_uring as a later, benchmarked port), raw UDP sockets.
+* **Layer 2 — Media:** FFmpeg / libav, NAL-unit parsing for frame classification.
+* **Layer 3 — Control Plane:** Python, FastAPI, Redis. C++/Python boundary (pybind11 vs. separate-process IPC) — see [Doc/dev/04-architecture-and-tech-decisions.md](Doc/dev/04-architecture-and-tech-decisions.md).
+* **Layer 4 — Interface:** React, TypeScript, Tailwind CSS.
+* **Layer 5 — Infrastructure:** Docker (multi-stage builds), Kubernetes, `tc netem` for network-condition testing, libFuzzer for parser hardening.
 
 ## Getting Started (Development)
 
-Prerequisites: Docker, Docker Compose, C++17 compiler.
+Prerequisites: Docker, Docker Compose, a C++17 compiler + CMake (for the native client, which is not containerized — see below).
 
-1. Clone the repository
 ```bash
-git clone [https://github.com/kiarashbashokian/SocketCast.git](https://github.com/kiarashbashokian/SocketCast.git)
+git clone https://github.com/kiarashbashokian/SocketCast.git
 cd SocketCast
 
-```
-
-
-2. Build the C++ Engine and API Containers
-```bash
+# Build and run the engine, control-plane API, dashboard, and Redis
 docker-compose build
-
-```
-
-
-3. Run the stack
-```bash
 docker-compose up -d
-
 ```
 
-
-4. Simulate Network Loss (Linux only)
-Use tc (Traffic Control) to test the protocol's recovery mechanics:
+**Native client** (speaks the protocol directly — intentionally not dockerized, it's a GUI app):
 ```bash
-# Introduce 5% packet loss and 50ms delay
-sudo tc qdisc add dev lo root netem loss 5% delay 50ms
-
+cmake -S client -B client/build
+cmake --build client/build
+./client/build/socketcast_client
 ```
 
+**Simulate packet loss / latency** (Linux, requires root):
+```bash
+sudo ./scripts/netem-loss.sh 5 50   # 5% loss, 50ms delay
+sudo ./scripts/netem-reset.sh       # remove
+```
 
+## Documentation
+
+Design docs live in [`Doc/dev/`](Doc/dev/):
+- [01-project-overview.md](Doc/dev/01-project-overview.md) — pitch, architecture summary, scope boundary
+- [02-protocol-spec.md](Doc/dev/02-protocol-spec.md) — packet format, retransmission logic, RTO, jitter buffer, rate control
+- [03-roadmap-and-scope.md](Doc/dev/03-roadmap-and-scope.md) — the full phase-by-phase build plan
+- [04-architecture-and-tech-decisions.md](Doc/dev/04-architecture-and-tech-decisions.md) — client architecture, concurrency model, security, observability
 
 ## Project Roadmap
 
-* [ ] Phase 0: Protocol Specification (Header layouts, state machine, ACK/NACK definitions).
-* [ ] Phase 1: Core C++ Engine (Raw UDP sockets, basic packet serialization).
-* [ ] Phase 2: Reliability Layer (Jitter buffer, dynamic RTO, retransmission thresholds).
-* [ ] Phase 3: Media Integration (FFmpeg chunking and encoding into custom packets).
-* [ ] Phase 4: Python Control Plane (FastAPI integration, Redis session state).
-* [ ] Phase 5: Kubernetes Deployment (UDP traffic routing, multi-node testing).
-* [ ] Phase 6: Web Interface (React/TS dashboard bridged via WebSockets/WebTransport).
+**Core (Phases 0–4)** — the transport protocol proven end-to-end:
+- [ ] Phase 0: Protocol specification (header layout, state machine, ACK/NACK, retransmit-deadline formula)
+- [ ] Phase 1: Bare C++ transport engine (epoll, raw UDP, basic ACK/NACK)
+- [ ] Phase 2: Reliability & rate control (selective-repeat ARQ, jitter buffer, token-bucket + RTT-trend backoff)
+- [ ] Phase 3: Media integration (FFmpeg chunking, NAL-unit frame classification)
+- [ ] Phase 4: Native client (SDL2/OpenCV playback, speaks the protocol directly)
+
+**Extended (Phases 5–8)** — production-shaped polish:
+- [ ] Phase 5: Python control plane (FastAPI, Redis session state, WebSocket bridge)
+- [ ] Phase 6: Web dashboard (React/TS/Tailwind, control plane + bridged video plane)
+- [ ] Phase 7: Containerization & Kubernetes (UDP service routing, HPA)
+- [ ] Phase 8: Hardening (Prometheus metrics, libFuzzer on the packet parser, DTLS, io_uring benchmark)
+
+## License
+
+MIT — see [LICENSE](LICENSE).
 
 ## Author
 
