@@ -1,12 +1,10 @@
 """Bridges frames from the C++ engine toward a browser client.
 
-Browsers can't open raw UDP sockets to speak the SocketCast protocol
-directly, so this WebSocket endpoint proxies frames for the web dashboard's
-video plane. See Doc/dev/04-architecture-and-tech-decisions.md,
-"The client blind spot".
+Browsers can't open raw UDP sockets, so this WebSocket endpoint proxies
+frames for the dashboard video plane.
 
-TODO(Phase 5): actually pull frames from the engine (IPC/shared queue) and
-forward them here instead of the placeholder loop below.
+TODO(Phase 5): pull frames from the engine (IPC/shared queue) and forward
+them here instead of the placeholder loop below.
 """
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 

@@ -1,5 +1,5 @@
-// libFuzzer entrypoint for the packet parser — see Doc/dev/03-roadmap-and-scope.md,
-// Phase 8. Build with SOCKETCAST_BUILD_FUZZ=ON using clang.
+// libFuzzer entrypoint for the packet parser (Phase 8).
+// Build with SOCKETCAST_BUILD_FUZZ=ON using clang.
 //
 // Run:
 //   ./fuzz_packet_parser -max_len=2048 corpus/

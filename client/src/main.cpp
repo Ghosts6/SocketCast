@@ -1,6 +1,6 @@
 #include <iostream>
 
-// Native playback client — see Doc/dev/03-roadmap-and-scope.md, Phase 4.
+// Native playback client (Phase 4).
 // TODO: speak the SocketCast protocol directly (reuse engine's packet.hpp),
 // render decoded frames via SDL2 or OpenCV.
 //

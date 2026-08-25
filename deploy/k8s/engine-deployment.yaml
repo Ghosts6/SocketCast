@@ -1,6 +1,5 @@
 # TODO(Phase 7): decide replica strategy — one engine pod per active stream
-# region, or a shared pool. UDP load-balancing support varies by ingress/CNI;
-# document what you land on in Doc/dev once decided.
+# region, or a shared pool. UDP load-balancing support varies by ingress/CNI.
 apiVersion: apps/v1
 kind: Deployment
 metadata:

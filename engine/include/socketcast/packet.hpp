@@ -1,14 +1,21 @@
 #pragma once
-// Packet format — see Doc/dev/02-protocol-spec.md, Section 2 & 3.
-//
-// TODO(Phase 0/1): finalize on-wire layout, add serialize()/deserialize(),
-// and a checksum implementation. Keep this struct POD-friendly so it maps
-// cleanly onto raw bytes off the socket.
+// On-wire packet format (v1: 32-byte big-endian header + CRC-32).
 
 #include <cstdint>
 #include <cstddef>
+#include <optional>
+#include <vector>
 
 namespace socketcast {
+
+constexpr uint32_t kPacketMagic = 0x53435354;  // "SCST"
+constexpr uint8_t kProtocolVersion = 1;
+constexpr size_t kHeaderSize = 32;
+constexpr uint16_t kMaxPayloadLength = 1200;
+
+constexpr uint8_t kFlagSyn = 0x01;
+constexpr uint8_t kFlagAck = 0x02;
+constexpr uint8_t kFlagFin = 0x04;
 
 enum class PacketType : uint8_t {
     Data = 0,
@@ -20,35 +27,38 @@ enum class PacketType : uint8_t {
 };
 
 enum class FrameType : uint8_t {
-    Keyframe = 0,   // high priority
-    PFrame,         // medium priority
-    Audio,          // high priority (latency-sensitive)
-    Control,        // protocol-internal, not media
+    Keyframe = 0,
+    PFrame,
+    Audio,
+    Control,
 };
 
-#pragma pack(push, 1)
 struct PacketHeader {
-    uint32_t sequence_number{};
-    uint64_t timestamp{};
+    uint32_t magic{kPacketMagic};
+    uint8_t version{kProtocolVersion};
     PacketType packet_type{PacketType::Data};
-    FrameType frame_type{FrameType::PFrame};
-    uint32_t stream_id{};
-    uint16_t payload_length{};
-    uint32_t checksum{};
+    FrameType frame_type{FrameType::Control};
+    uint8_t flags{0};
+    uint32_t stream_id{0};
+    uint32_t sequence_number{0};
+    uint64_t timestamp_us{0};
+    uint16_t payload_length{0};
+    uint16_t reserved{0};
+    uint32_t checksum{0};
 };
-#pragma pack(pop)
 
 class Packet {
 public:
     Packet() = default;
 
-    // TODO: implement wire (de)serialization.
-    static Packet deserialize(const uint8_t* data, size_t len);
+    static std::optional<Packet> deserialize(const uint8_t* data, size_t len);
+    // Returns bytes written, or 0 if out_capacity is too small or payload is too large.
     size_t serialize(uint8_t* out, size_t out_capacity) const;
 
     PacketHeader header{};
-    // TODO: payload storage (owned buffer vs. view — decide once the
-    // send/receive path is designed).
+    std::vector<uint8_t> payload;
 };
 
-} // namespace socketcast
+uint32_t crc32(const uint8_t* data, size_t len);
+
+}  // namespace socketcast

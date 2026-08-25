@@ -1,7 +1,6 @@
-"""SocketCast control-plane entrypoint.
+"""SocketCast control-plane entrypoint (Phase 5).
 
-See Doc/dev/03-roadmap-and-scope.md, Phase 5, and
-Doc/dev/04-architecture-and-tech-decisions.md for the C++/Python boundary.
+Session APIs and the browser bridge live here; protocol logic stays in C++.
 """
 from fastapi import FastAPI
 

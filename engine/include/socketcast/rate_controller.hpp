@@ -1,6 +1,6 @@
 #pragma once
 // Token-bucket rate limiter + RTT-trend congestion backoff ("BBR-inspired",
-// not full BBR — see Doc/dev/02-protocol-spec.md, Section 7).
+// not full BBR).
 // TODO(Phase 2): token bucket, loss/RTT-trend based bitrate-tier signal.
 
 #include <cstdint>

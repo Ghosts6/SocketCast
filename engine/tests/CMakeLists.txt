@@ -1,6 +1,19 @@
-# TODO: wire up GoogleTest (or Catch2) once Phase 1 lands.
-# Example:
-# find_package(GTest REQUIRED)
-# add_executable(socketcast_tests test_packet.cpp)
-# target_link_libraries(socketcast_tests PRIVATE socketcast_core GTest::gtest_main)
-# add_test(NAME socketcast_tests COMMAND socketcast_tests)
+add_executable(test_packet test_packet.cpp)
+target_link_libraries(test_packet PRIVATE socketcast_core)
+add_test(NAME test_packet COMMAND test_packet)
+
+add_executable(test_rto test_rto.cpp)
+target_link_libraries(test_rto PRIVATE socketcast_core)
+add_test(NAME test_rto COMMAND test_rto)
+
+add_executable(test_session test_session.cpp)
+target_link_libraries(test_session PRIVATE socketcast_core)
+add_test(NAME test_session COMMAND test_session)
+
+add_executable(test_loopback test_loopback.cpp)
+target_link_libraries(test_loopback PRIVATE socketcast_core Threads::Threads)
+add_test(NAME test_loopback COMMAND test_loopback)
+
+add_executable(test_cli test_cli.cpp)
+target_link_libraries(test_cli PRIVATE socketcast_core)
+add_test(NAME test_cli COMMAND test_cli $<TARGET_FILE:socketcast_engine>)

@@ -7,7 +7,7 @@
 ![Docker](https://img.shields.io/badge/Docker-Kubernetes-2496ED.svg)
 ![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)
 
-> **Status:** 🚧  early development (Phase 0/1 - see [Roadmap](#project-roadmap)). Not yet functional end-to-end. This note comes down once the core transport (Phases 0–4) is working.
+> **Status:** 🚧  early development (Phases 0–1: spec frozen, dummy UDP+ACK/NACK works). Media path (Phases 3–4) is not done. This note comes down once the core transport (Phases 0–4) is working.
 
 A custom reliable-UDP transport protocol designed and built from scratch for real-time video streaming.
 
@@ -53,7 +53,7 @@ graph TD
 
 ## Core Protocol Features
 
-*(Design targets for Phases 0–2 - see [Doc/dev/02-protocol-spec.md](Doc/dev/02-protocol-spec.md) for the full spec.)*
+*(Design targets for Phases 0–2.)*
 
 ### 1. Deadline-Based Loss Recovery
 Not every packet is worth recovering. The protocol computes the exact time a lost packet is needed for playback; if the round trip needed for a NACK + retransmit would exceed that deadline, the packet is intentionally dropped in favor of decoder concealment, rather than retransmitting into a latency cascade.
@@ -71,7 +71,7 @@ Loss rate and RTT trend are monitored together to detect congestion *before* sev
 
 * **Layer 1 - Transport & Networking:** C++17, epoll (io_uring as a later, benchmarked port), raw UDP sockets.
 * **Layer 2 - Media:** FFmpeg / libav, NAL-unit parsing for frame classification.
-* **Layer 3 - Control Plane:** Python, FastAPI, Redis. C++/Python boundary (pybind11 vs. separate-process IPC) - see [Doc/dev/04-architecture-and-tech-decisions.md](Doc/dev/04-architecture-and-tech-decisions.md).
+* **Layer 3 - Control Plane:** Python, FastAPI, Redis. C++/Python boundary is separate-process IPC (pybind11 is optional later).
 * **Layer 4 - Interface:** React, TypeScript, Tailwind CSS.
 * **Layer 5 - Infrastructure:** Docker (multi-stage builds), Kubernetes, `tc netem` for network-condition testing, libFuzzer for parser hardening.
 
@@ -95,6 +95,18 @@ cmake --build client/build
 ./client/build/socketcast_client
 ```
 
+**Phase 1 dummy exchange** (two processes, no video):
+```bash
+cmake -S engine -B engine/build -DSOCKETCAST_BUILD_TESTS=ON
+cmake --build engine/build
+ctest --test-dir engine/build --output-on-failure
+
+# or: listen in one terminal, send in another
+./engine/build/socketcast_engine listen --bind 127.0.0.1 --port 5000
+./engine/build/socketcast_engine send --host 127.0.0.1 --port 5000 --count 100
+# equivalent: ./scripts/phase1-loopback.sh
+```
+
 **Simulate packet loss / latency** (Linux, requires root):
 ```bash
 sudo ./scripts/netem-loss.sh 5 50   # 5% loss, 50ms delay
@@ -103,17 +115,13 @@ sudo ./scripts/netem-reset.sh       # remove
 
 ## Documentation
 
-Design docs live in [`Doc/dev/`](Doc/dev/):
-- [01-project-overview.md](Doc/dev/01-project-overview.md) - pitch, architecture summary, scope boundary
-- [02-protocol-spec.md](Doc/dev/02-protocol-spec.md) - packet format, retransmission logic, RTO, jitter buffer, rate control
-- [03-roadmap-and-scope.md](Doc/dev/03-roadmap-and-scope.md) - the full phase-by-phase build plan
-- [04-architecture-and-tech-decisions.md](Doc/dev/04-architecture-and-tech-decisions.md) - client architecture, concurrency model, security, observability
+**🚧 to be complete**
 
 ## Project Roadmap
 
 **Core (Phases 0–4)** - the transport protocol proven end-to-end:
-- [ ] Phase 0: Protocol specification (header layout, state machine, ACK/NACK, retransmit-deadline formula)
-- [ ] Phase 1: Bare C++ transport engine (epoll, raw UDP, basic ACK/NACK)
+- [x] Phase 0: Protocol specification (header layout, state machine, ACK/NACK, retransmit-deadline formula)
+- [x] Phase 1: Bare C++ transport engine (epoll, raw UDP, basic ACK/NACK)
 - [ ] Phase 2: Reliability & rate control (selective-repeat ARQ, jitter buffer, token-bucket + RTT-trend backoff)
 - [ ] Phase 3: Media integration (FFmpeg chunking, NAL-unit frame classification)
 - [ ] Phase 4: Native client (SDL2/OpenCV playback, speaks the protocol directly)

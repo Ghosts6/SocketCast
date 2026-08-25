@@ -13,7 +13,8 @@ endif()
 
 add_compile_options(-Wall -Wextra -Wpedantic)
 
-# --- core library ---
+find_package(Threads REQUIRED)
+
 add_library(socketcast_core
     src/packet.cpp
     src/session.cpp
@@ -26,7 +27,7 @@ target_include_directories(socketcast_core PUBLIC include)
 
 # --- engine executable ---
 add_executable(socketcast_engine src/main.cpp)
-target_link_libraries(socketcast_engine PRIVATE socketcast_core)
+target_link_libraries(socketcast_engine PRIVATE socketcast_core Threads::Threads)
 
 # --- tests ---
 if(SOCKETCAST_BUILD_TESTS)

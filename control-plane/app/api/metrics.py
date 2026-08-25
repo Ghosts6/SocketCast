@@ -1,8 +1,7 @@
 """Metrics endpoints — proxies/aggregates stats pulled from the C++ engine.
 
-TODO(Phase 5/8): decide the exact boundary (Prometheus scrape from engine
-vs. this service re-exposing them) — see
-Doc/dev/04-architecture-and-tech-decisions.md, "Observability boundary".
+TODO(Phase 5/8): Prometheus scrape from the engine vs. this service
+re-exposing them.
 """
 from fastapi import APIRouter
 

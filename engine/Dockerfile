@@ -27,3 +27,4 @@ EXPOSE 5000/udp
 EXPOSE 9100/tcp
 
 ENTRYPOINT ["/usr/local/bin/socketcast_engine"]
+CMD ["listen", "--bind", "0.0.0.0", "--port", "5000"]

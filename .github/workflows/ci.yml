@@ -16,9 +16,8 @@ jobs:
         run: cmake -S engine -B engine/build -G Ninja -DSOCKETCAST_BUILD_TESTS=ON
       - name: Build
         run: cmake --build engine/build
-      # TODO(Phase 1+): re-enable once tests exist.
-      # - name: Test
-      #   run: ctest --test-dir engine/build --output-on-failure
+      - name: Test
+        run: ctest --test-dir engine/build --output-on-failure
 
   control-plane:
     runs-on: ubuntu-latest

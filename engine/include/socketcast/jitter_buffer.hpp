@@ -1,5 +1,5 @@
 #pragma once
-// Adaptive jitter buffer. See Doc/dev/02-protocol-spec.md, Section 6.
+// Adaptive jitter buffer.
 // TODO(Phase 2): sliding-window jitter estimate, adaptive depth,
 // underrun (freeze/buffering) and overrun (drop-oldest-low-priority) handling.
 
