@@ -204,6 +204,7 @@ std::vector<Packet> Session::on_packet(const Packet& pkt,
             const auto rtt = std::chrono::duration_cast<std::chrono::microseconds>(
                 now - it->second.last_sent);
             rto_.onRttSample(rtt);
+            rate_controller_.onAck(rtt);
             in_flight_.erase(it);
             ++stats_.acked;
         }
@@ -222,6 +223,7 @@ std::vector<Packet> Session::on_packet(const Packet& pkt,
     if (type == PacketType::Nack) {
         auto it = in_flight_.find(pkt.header.sequence_number);
         if (it != in_flight_.end()) {
+            rate_controller_.onLoss();
             it->second.last_sent = now;
             ++it->second.retries;
             ++stats_.retransmits;
@@ -235,6 +237,7 @@ std::vector<Packet> Session::on_packet(const Packet& pkt,
 
 std::vector<Packet> Session::on_tick(std::chrono::steady_clock::time_point now) {
     std::vector<Packet> out;
+    rate_controller_.onTick(now);
     const auto rto = rto_.currentRto();
 
     if (state_ == SessionState::Handshaking) {
@@ -264,10 +267,12 @@ std::vector<Packet> Session::on_tick(std::chrono::steady_clock::time_point now) 
             if (now - slot.last_sent >= rto) {
                 ++slot.retries;
                 if (slot.retries > kMaxRetries) {
+                    rate_controller_.onLoss();
                     failed_ = true;
                     state_ = SessionState::Closed;
                     return {};
                 }
+                rate_controller_.onLoss();
                 slot.last_sent = now;
                 ++stats_.retransmits;
                 out.push_back(slot.packet);

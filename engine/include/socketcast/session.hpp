@@ -1,7 +1,9 @@
 #pragma once
-// One 1:1 session. Handshake + Phase 1 DATA/ACK/NACK window.
+// One 1:1 session. Handshake + Phase 2 selective-repeat, rate control, jitter buffering.
 
+#include "socketcast/jitter_buffer.hpp"
 #include "socketcast/packet.hpp"
+#include "socketcast/rate_controller.hpp"
 #include "socketcast/rto.hpp"
 
 #include <chrono>
@@ -86,6 +88,8 @@ private:
     std::map<uint32_t, InFlight> in_flight_;
     std::map<uint32_t, Packet> reorder_;
     RtoEstimator rto_;
+    RateController rate_controller_{1'000'000};  // Start at 1 Mbps
+    JitterBuffer jitter_buffer_{50};              // 50ms target depth
     Stats stats_{};
     int handshake_retries_{0};
     std::chrono::steady_clock::time_point last_handshake_sent_{};

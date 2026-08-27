@@ -7,7 +7,7 @@
 ![Docker](https://img.shields.io/badge/Docker-Kubernetes-2496ED.svg)
 ![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)
 
-> **Status:** 🚧  early development (Phases 0–1: spec frozen, dummy UDP+ACK/NACK works). Media path (Phases 3–4) is not done. This note comes down once the core transport (Phases 0–4) is working.
+> **Status:** 🚧  early development (Phases 0–2: spec frozen, selective-repeat + rate control + jitter buffering complete; dummy UDP packets validated. Phases 3–4 start media integration). This note comes down once the core transport (Phases 0–4) ships end-to-end.
 
 A custom reliable-UDP transport protocol designed and built from scratch for real-time video streaming.
 
@@ -15,41 +15,64 @@ Unlike streaming projects that wrap an existing transport (WebRTC, gStreamer, pl
 
 ## System Architecture
 
-Decoupled layers separate the high-performance network I/O from the control plane and the web UI. Note the two distinct client paths - this split exists because **browsers cannot open raw UDP sockets**, so only the native client speaks the protocol directly; the browser is bridged.
+Decoupled layers separate the high-performance network I/O from the control plane and the web UI. Note the two distinct client paths—this split exists because **browsers cannot open raw UDP sockets**, so only the native client speaks the protocol directly; the browser is bridged via WebSocket.
 
 ```mermaid
 graph TD
-    subgraph Frontend [Web Plane - Browser]
-        UI[React / TypeScript / Tailwind]
+    subgraph WebPlane ["🌐 Web Plane - Browser"]
+        UI["React / TypeScript / Tailwind<br/>(control + canvas video)"]
     end
 
-    subgraph ControlPlane [Python Control Plane]
-        API[FastAPI Service]
-        Bridge[WebSocket Bridge]
-        Redis[(Redis - state / rate limits)]
-        API <--> Redis
+    subgraph ControlPlane ["🐍 Python Control Plane"]
+        API["FastAPI Service<br/>(session mgmt, metrics)"]
+        Bridge["WebSocket Bridge<br/>(frame proxy)"]
+        Redis["[(Redis)]<br/>session state<br/>rate limits"]
+        API <-->|gRPC/IPC| Redis
     end
 
-    subgraph TransportEngine [C++ Core Engine]
-        UDP[Raw UDP Sockets + epoll]
-        Jitter[Jitter Buffer]
-        ARQ[Selective-Repeat ARQ]
-        RTO[Dynamic RTO - Jacobson's]
-        UDP --- Jitter --- ARQ --- RTO
+    subgraph TransportEngine ["⚡ C++ Core Engine - Phase 0-2"]
+        subgraph RxPath ["Receive Path"]
+            UDP["Raw UDP Sockets<br/>(epoll loop)"]
+            Jitter["Jitter Buffer<br/>(adaptive depth,<br/>underrun/overrun)"]
+            ARQ_RX["Reorder Buffer<br/>(in-order delivery)"]
+        end
+        
+        subgraph TxPath ["Send Path"]
+            Window["Send Window<br/>(seq tracking)"]
+            Rate["Rate Controller<br/>(token bucket,<br/>RTT-trend backoff)"]
+            RTO["Dynamic RTO<br/>(Jacobson + RTTVAR)"]
+        end
+
+        UDP --> Jitter --> ARQ_RX
+        Window --> Rate --> RTO
     end
 
-    subgraph MediaLayer [Media Handling]
-        FFmpeg[FFmpeg / libav]
+    subgraph MediaLayer ["📹 Media - Phase 3+"]
+        FFmpeg["FFmpeg / libav<br/>(chunks + NAL parse)"]
+        Deadline["Playback Deadline<br/>(discard late packets)"]
     end
 
-    NativeClient[Native Client - SDL2/OpenCV]
+    NativeClient["🎬 Native Client<br/>SDL2/OpenCV<br/>(speaks protocol)"]
 
-    FFmpeg -->|encodes into custom packets| TransportEngine
-    TransportEngine <-->|custom UDP protocol, direct| NativeClient
-    TransportEngine <-->|local IPC + metrics| ControlPlane
-    Bridge <-->|proxies frames| TransportEngine
-    ControlPlane <-->|REST / WebSocket| UI
+    FFmpeg -->|real chunks| Deadline -->|prioritized packets| TransportEngine
+    TransportEngine <-->|custom UDP<br/>protocol| NativeClient
+    TransportEngine <-->|Prometheus<br/>metrics| ControlPlane
+    ControlPlane <-->|REST / WS| UI
+    Bridge <-->|frame stream| TransportEngine
 ```
+
+### Architecture Notes
+
+| Component | Purpose | Status |
+|-----------|---------|--------|
+| **Jitter Buffer** | Smooths out arrival-time variance via adaptive depth buffering | ✅ Phase 2 |
+| **Rate Controller** | Token-bucket pacing + RTT-trend congestion backoff (BBR-inspired) | ✅ Phase 2 |
+| **Dynamic RTO** | Jacobson's algorithm adapts retransmit timeout to current RTT | ✅ Phase 1 |
+| **Selective-Repeat ARQ** | NACK-based retransmission keeps data flowing without stop-and-wait | ✅ Phase 1 |
+| **Reorder Buffer** | In-order delivery despite out-of-order packet arrivals | ✅ Phase 1 |
+| **Playback Deadline** | Computes max tolerable latency; discards packets that arrive too late | 🚧 Phase 3 |
+
+**Key insight:** Phases 1–2 handle reliability and congestion. Phase 3 adds real media (FFmpeg chunks) and deadline-aware drop logic. Phases 4+ add native playback, control plane, and hardening.
 
 ## Core Protocol Features
 
@@ -113,6 +136,11 @@ sudo ./scripts/netem-loss.sh 5 50   # 5% loss, 50ms delay
 sudo ./scripts/netem-reset.sh       # remove
 ```
 
+**Phase 2 reliability & rate control validation** (automatic benchmark suite under loss/latency/jitter):
+```bash
+sudo ./scripts/phase2-benchmark.sh  # run full suite with tc netem injection
+```
+
 ## Documentation
 
 **🚧 to be complete**
@@ -122,8 +150,8 @@ sudo ./scripts/netem-reset.sh       # remove
 **Core (Phases 0–4)** - the transport protocol proven end-to-end:
 - [x] Phase 0: Protocol specification (header layout, state machine, ACK/NACK, retransmit-deadline formula)
 - [x] Phase 1: Bare C++ transport engine (epoll, raw UDP, basic ACK/NACK)
-- [ ] Phase 2: Reliability & rate control (selective-repeat ARQ, jitter buffer, token-bucket + RTT-trend backoff)
-- [ ] Phase 3: Media integration (FFmpeg chunking, NAL-unit frame classification)
+- [x] Phase 2: Reliability & rate control (selective-repeat ARQ, jitter buffer, token-bucket + RTT-trend backoff, `tc netem` validated)
+- [ ] Phase 3: Media integration (FFmpeg chunking, NAL-unit frame classification, playback-deadline drop)
 - [ ] Phase 4: Native client (SDL2/OpenCV playback, speaks the protocol directly)
 
 **Extended (Phases 5–8)** - production-shaped polish:

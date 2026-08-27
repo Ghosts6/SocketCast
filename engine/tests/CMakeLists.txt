@@ -17,3 +17,11 @@ add_test(NAME test_loopback COMMAND test_loopback)
 add_executable(test_cli test_cli.cpp)
 target_link_libraries(test_cli PRIVATE socketcast_core)
 add_test(NAME test_cli COMMAND test_cli $<TARGET_FILE:socketcast_engine>)
+
+add_executable(test_jitter_buffer test_jitter_buffer.cpp)
+target_link_libraries(test_jitter_buffer PRIVATE socketcast_core)
+add_test(NAME test_jitter_buffer COMMAND test_jitter_buffer)
+
+add_executable(test_rate_controller test_rate_controller.cpp)
+target_link_libraries(test_rate_controller PRIVATE socketcast_core)
+add_test(NAME test_rate_controller COMMAND test_rate_controller)
