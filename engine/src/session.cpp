@@ -1,7 +1,6 @@
 #include "socketcast/session.hpp"
 
 #include <algorithm>
-#include <cstring>
 
 namespace socketcast {
 namespace {
@@ -16,6 +15,11 @@ Packet control_packet(PacketType type, uint32_t stream_id, uint32_t seq, uint8_t
     return pkt;
 }
 
+uint64_t steady_us(std::chrono::steady_clock::time_point tp) {
+    return static_cast<uint64_t>(
+        std::chrono::duration_cast<std::chrono::microseconds>(tp.time_since_epoch()).count());
+}
+
 }  // namespace
 
 Session::Session(Role role, sockaddr_in peer) : role_(role), peer_(peer) {
@@ -25,6 +29,7 @@ Session::Session(Role role, sockaddr_in peer) : role_(role), peer_(peer) {
 }
 
 void Session::set_dummy_send(uint32_t count, uint16_t payload_size) {
+    media_mode_ = false;
     dummy_remaining_ = count;
     payload_size_ = std::max<uint16_t>(payload_size, 4);
     if (payload_size_ > kMaxPayloadLength) {
@@ -32,12 +37,25 @@ void Session::set_dummy_send(uint32_t count, uint16_t payload_size) {
     }
 }
 
+void Session::set_media_send(std::unique_ptr<MediaSource> source) {
+    media_mode_ = true;
+    media_source_ = std::move(source);
+    dummy_remaining_ = 0;
+}
+
+void Session::set_media_receive(std::unique_ptr<MediaSink> sink) {
+    media_sink_ = std::move(sink);
+}
+
 bool Session::is_complete() const {
     if (failed_ || role_ != Role::Initiator) {
         return false;
     }
-    return state_ != SessionState::Handshaking && dummy_remaining_ == 0 &&
-           in_flight_.empty();
+    if (media_mode_) {
+        return state_ != SessionState::Handshaking && media_source_ && media_source_->eof() &&
+               in_flight_.empty();
+    }
+    return state_ != SessionState::Handshaking && dummy_remaining_ == 0 && in_flight_.empty();
 }
 
 std::vector<Packet> Session::start() {
@@ -74,8 +92,7 @@ Packet Session::make_data(uint32_t seq, std::chrono::steady_clock::time_point no
     pkt.header.frame_type = FrameType::Control;
     pkt.header.stream_id = stream_id_;
     pkt.header.sequence_number = seq;
-    pkt.header.timestamp_us = static_cast<uint64_t>(
-        std::chrono::duration_cast<std::chrono::microseconds>(now.time_since_epoch()).count());
+    pkt.header.timestamp_us = steady_us(now);
     pkt.payload.resize(payload_size_);
     pkt.payload[0] = static_cast<uint8_t>(seq >> 24);
     pkt.payload[1] = static_cast<uint8_t>(seq >> 16);
@@ -87,11 +104,92 @@ Packet Session::make_data(uint32_t seq, std::chrono::steady_clock::time_point no
     return pkt;
 }
 
+Packet Session::make_media_packet(const MediaChunk& chunk, uint32_t seq) const {
+    Packet pkt;
+    pkt.header.packet_type = PacketType::Data;
+    pkt.header.frame_type = chunk.frame_type;
+    pkt.header.stream_id = stream_id_;
+    pkt.header.sequence_number = seq;
+    pkt.header.timestamp_us = chunk.pts_us;
+    pkt.payload = chunk.payload;
+    return pkt;
+}
+
+uint8_t Session::jitter_priority(FrameType ft) const {
+    return (ft == FrameType::Keyframe || ft == FrameType::Audio) ? 1 : 0;
+}
+
+bool Session::should_retransmit(const InFlight& slot,
+                               std::chrono::steady_clock::time_point now) const {
+    if (!media_mode_) {
+        return true;
+    }
+    if (!stream_start_set_) {
+        return true;
+    }
+    const uint64_t now_us = steady_us(now);
+    const uint64_t stream_now = now_us - stream_start_us_;
+    const uint64_t playback = slot.packet.header.timestamp_us;
+    if (playback <= stream_now + kSafetyMarginUs) {
+        return false;
+    }
+    const int64_t deadline = static_cast<int64_t>(playback - stream_now - kSafetyMarginUs);
+    return static_cast<int64_t>(rto_.currentRto().count()) < deadline;
+}
+
+void Session::deliver_from_jitter(std::chrono::steady_clock::time_point now) {
+    if (!media_sink_) {
+        return;
+    }
+    const uint64_t now_us = steady_us(now);
+    while (true) {
+        auto pkt = jitter_buffer_.pop(now_us);
+        if (!pkt) {
+            break;
+        }
+        // Jitter buffer stores metadata only; payload is written in deliver_in_order.
+        (void)pkt;
+    }
+}
+
 std::vector<Packet> Session::fill_window(std::chrono::steady_clock::time_point now) {
     std::vector<Packet> out;
     if (role_ != Role::Initiator || state_ != SessionState::Active) {
         return out;
     }
+
+    rate_controller_.onTick(now);
+
+    if (media_mode_ && media_source_) {
+        while (in_flight_.size() < kSendWindow && !media_source_->eof()) {
+            const auto chunks = media_source_->next_chunks(1);
+            if (chunks.empty()) {
+                break;
+            }
+            const auto& chunk = chunks.front();
+            const size_t pkt_bytes = kHeaderSize + chunk.payload.size();
+            if (rate_controller_.availableTokens() < pkt_bytes) {
+                break;
+            }
+            rate_controller_.consumeTokens(static_cast<uint32_t>(pkt_bytes));
+
+            const uint32_t seq = next_seq_++;
+            Packet pkt = make_media_packet(chunk, seq);
+            if (!stream_start_set_) {
+                stream_start_us_ = steady_us(now);
+                stream_start_set_ = true;
+            }
+            InFlight slot;
+            slot.packet = pkt;
+            slot.last_sent = now;
+            slot.retries = 0;
+            in_flight_.emplace(seq, slot);
+            ++stats_.data_sent;
+            out.push_back(std::move(pkt));
+        }
+        return out;
+    }
+
     while (in_flight_.size() < kSendWindow && dummy_remaining_ > 0) {
         const uint32_t seq = next_seq_++;
         Packet pkt = make_data(seq, now);
@@ -107,18 +205,31 @@ std::vector<Packet> Session::fill_window(std::chrono::steady_clock::time_point n
     return out;
 }
 
-std::vector<Packet> Session::deliver_in_order() {
+std::vector<Packet> Session::deliver_in_order(std::chrono::steady_clock::time_point now) {
     std::vector<Packet> acks;
+    const uint64_t arrival_us = steady_us(now);
     while (true) {
         auto it = reorder_.find(next_expected_);
         if (it == reorder_.end()) {
             break;
         }
+        const Packet& pkt = it->second;
         ++stats_.data_received;
+
+        if (media_sink_) {
+            media_sink_->write(pkt.payload);
+            stats_.media_bytes_received += pkt.payload.size();
+        }
+
+        jitter_buffer_.push(next_expected_, arrival_us,
+                            static_cast<uint16_t>(pkt.payload.size()),
+                            jitter_priority(pkt.header.frame_type));
+
         acks.push_back(make_ack(next_expected_));
         reorder_.erase(it);
         ++next_expected_;
     }
+    deliver_from_jitter(now);
     return acks;
 }
 
@@ -185,7 +296,7 @@ std::vector<Packet> Session::on_packet(const Packet& pkt,
         }
         reorder_.emplace(seq, pkt);
         if (seq == next_expected_) {
-            auto acks = deliver_in_order();
+            auto acks = deliver_in_order(now);
             out.insert(out.end(), acks.begin(), acks.end());
         } else {
             out.push_back(make_nack(next_expected_));
@@ -208,8 +319,7 @@ std::vector<Packet> Session::on_packet(const Packet& pkt,
             in_flight_.erase(it);
             ++stats_.acked;
         }
-        if (role_ == Role::Initiator && dummy_remaining_ == 0 && in_flight_.empty() &&
-            !fin_sent_) {
+        if (role_ == Role::Initiator && is_complete() && !fin_sent_) {
             fin_sent_ = true;
             state_ = SessionState::Closing;
             out.push_back(make_handshake(kFlagFin));
@@ -223,11 +333,16 @@ std::vector<Packet> Session::on_packet(const Packet& pkt,
     if (type == PacketType::Nack) {
         auto it = in_flight_.find(pkt.header.sequence_number);
         if (it != in_flight_.end()) {
-            rate_controller_.onLoss();
-            it->second.last_sent = now;
-            ++it->second.retries;
-            ++stats_.retransmits;
-            out.push_back(it->second.packet);
+            if (should_retransmit(it->second, now)) {
+                rate_controller_.onLoss();
+                it->second.last_sent = now;
+                ++it->second.retries;
+                ++stats_.retransmits;
+                out.push_back(it->second.packet);
+            } else {
+                in_flight_.erase(it);
+                ++stats_.deadline_drops;
+            }
         }
         return out;
     }
@@ -262,8 +377,8 @@ std::vector<Packet> Session::on_tick(std::chrono::steady_clock::time_point now) 
     }
 
     if (state_ == SessionState::Active || state_ == SessionState::Closing) {
-        for (auto& entry : in_flight_) {
-            auto& slot = entry.second;
+        for (auto it = in_flight_.begin(); it != in_flight_.end();) {
+            auto& slot = it->second;
             if (now - slot.last_sent >= rto) {
                 ++slot.retries;
                 if (slot.retries > kMaxRetries) {
@@ -272,14 +387,24 @@ std::vector<Packet> Session::on_tick(std::chrono::steady_clock::time_point now) 
                     state_ = SessionState::Closed;
                     return {};
                 }
-                rate_controller_.onLoss();
-                slot.last_sent = now;
-                ++stats_.retransmits;
-                out.push_back(slot.packet);
+                if (should_retransmit(slot, now)) {
+                    rate_controller_.onLoss();
+                    slot.last_sent = now;
+                    ++stats_.retransmits;
+                    out.push_back(slot.packet);
+                } else {
+                    ++stats_.deadline_drops;
+                    it = in_flight_.erase(it);
+                    continue;
+                }
             }
+            ++it;
         }
         auto more = fill_window(now);
         out.insert(out.end(), more.begin(), more.end());
+        if (role_ == Role::Listener) {
+            deliver_from_jitter(now);
+        }
     }
     return out;
 }

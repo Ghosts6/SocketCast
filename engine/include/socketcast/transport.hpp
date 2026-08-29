@@ -27,6 +27,9 @@ public:
 
     void configure_send(const std::string& peer_host, uint16_t peer_port, uint32_t count,
                         uint16_t payload_size);
+    void configure_stream(const std::string& peer_host, uint16_t peer_port,
+                          const std::string& input_path, uint32_t fps = 30);
+    void configure_receive(const std::string& output_path);
     void set_rx_callback(RxCallback cb) { rx_callback_ = std::move(cb); }
 
     const Session::Stats* stats() const;

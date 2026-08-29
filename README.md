@@ -130,6 +130,13 @@ ctest --test-dir engine/build --output-on-failure
 # equivalent: ./scripts/phase1-loopback.sh
 ```
 
+**Phase 3 media streaming** (H.264 over SocketCast; requires `ffmpeg` in PATH for non-`.h264` inputs):
+```bash
+./engine/build/socketcast_engine listen --bind 127.0.0.1 --port 5000 --output received.h264
+./engine/build/socketcast_engine stream --host 127.0.0.1 --port 5000 --input video.mp4
+# or: ./scripts/phase3-stream.sh video.mp4 received.h264
+```
+
 **Simulate packet loss / latency** (Linux, requires root):
 ```bash
 sudo ./scripts/netem-loss.sh 5 50   # 5% loss, 50ms delay
@@ -151,7 +158,7 @@ sudo ./scripts/phase2-benchmark.sh  # run full suite with tc netem injection
 - [x] Phase 0: Protocol specification (header layout, state machine, ACK/NACK, retransmit-deadline formula)
 - [x] Phase 1: Bare C++ transport engine (epoll, raw UDP, basic ACK/NACK)
 - [x] Phase 2: Reliability & rate control (selective-repeat ARQ, jitter buffer, token-bucket + RTT-trend backoff, `tc netem` validated)
-- [ ] Phase 3: Media integration (FFmpeg chunking, NAL-unit frame classification, playback-deadline drop)
+- [x] Phase 3: Media integration (FFmpeg chunking, NAL-unit frame classification, playback-deadline drop)
 - [ ] Phase 4: Native client (SDL2/OpenCV playback, speaks the protocol directly)
 
 **Extended (Phases 5–8)** - production-shaped polish:

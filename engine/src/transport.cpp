@@ -1,5 +1,8 @@
 #include "socketcast/transport.hpp"
 
+#include "socketcast/media_sink.hpp"
+#include "socketcast/media_source.hpp"
+
 #include <arpa/inet.h>
 #include <cerrno>
 #include <chrono>
@@ -94,6 +97,30 @@ void Transport::configure_send(const std::string& peer_host, uint16_t peer_port,
     mode_ = Mode::Send;
     session_ = std::make_unique<Session>(Session::Role::Initiator, make_addr(peer_host, peer_port));
     session_->set_dummy_send(count, payload_size);
+}
+
+void Transport::configure_stream(const std::string& peer_host, uint16_t peer_port,
+                                 const std::string& input_path, uint32_t fps) {
+    mode_ = Mode::Send;
+    session_ = std::make_unique<Session>(Session::Role::Initiator, make_addr(peer_host, peer_port));
+    auto source = std::make_unique<MediaSource>(input_path, fps);
+    if (!source->open()) {
+        throw std::runtime_error("failed to open media input: " + input_path);
+    }
+    session_->set_media_send(std::move(source));
+}
+
+void Transport::configure_receive(const std::string& output_path) {
+    auto sink = std::make_unique<MediaSink>(output_path);
+    if (!sink->open()) {
+        throw std::runtime_error("failed to open media output: " + output_path);
+    }
+    if (!session_) {
+        sockaddr_in peer{};
+        peer.sin_family = AF_INET;
+        session_ = std::make_unique<Session>(Session::Role::Listener, peer);
+    }
+    session_->set_media_receive(std::move(sink));
 }
 
 const Session::Stats* Transport::stats() const {

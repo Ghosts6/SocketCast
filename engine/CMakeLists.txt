@@ -22,6 +22,9 @@ add_library(socketcast_core
     src/jitter_buffer.cpp
     src/rate_controller.cpp
     src/rto.cpp
+    src/nal_parser.cpp
+    src/media_source.cpp
+    src/media_sink.cpp
 )
 target_include_directories(socketcast_core PUBLIC include)
 

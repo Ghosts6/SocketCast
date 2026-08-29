@@ -1,7 +1,10 @@
 #pragma once
-// One 1:1 session. Handshake + Phase 2 selective-repeat, rate control, jitter buffering.
+// One 1:1 session. Handshake + selective-repeat, rate control, jitter buffering,
+// and Phase 3 media streaming.
 
 #include "socketcast/jitter_buffer.hpp"
+#include "socketcast/media_sink.hpp"
+#include "socketcast/media_source.hpp"
 #include "socketcast/packet.hpp"
 #include "socketcast/rate_controller.hpp"
 #include "socketcast/rto.hpp"
@@ -9,6 +12,7 @@
 #include <chrono>
 #include <cstdint>
 #include <map>
+#include <memory>
 #include <netinet/in.h>
 #include <vector>
 
@@ -31,6 +35,8 @@ public:
         uint64_t acked{0};
         uint64_t retransmits{0};
         uint64_t nacks_sent{0};
+        uint64_t deadline_drops{0};
+        uint64_t media_bytes_received{0};
     };
 
     Session(Role role, sockaddr_in peer);
@@ -45,8 +51,9 @@ public:
     bool is_complete() const;
 
     void set_dummy_send(uint32_t count, uint16_t payload_size);
+    void set_media_send(std::unique_ptr<MediaSource> source);
+    void set_media_receive(std::unique_ptr<MediaSink> sink);
 
-    // Packets the caller must send (SYN, etc.).
     std::vector<Packet> start();
     std::vector<Packet> on_packet(const Packet& pkt,
                                   std::chrono::steady_clock::time_point now);
@@ -58,6 +65,7 @@ private:
     static constexpr uint32_t kSendWindow = 8;
     static constexpr int kMaxRetries = 20;
     static constexpr uint32_t kListenerStreamId = 1;
+    static constexpr uint64_t kSafetyMarginUs = 50'000;
 
     struct InFlight {
         Packet packet;
@@ -69,8 +77,13 @@ private:
     Packet make_ack(uint32_t seq) const;
     Packet make_nack(uint32_t seq) const;
     Packet make_data(uint32_t seq, std::chrono::steady_clock::time_point now) const;
+    Packet make_media_packet(const MediaChunk& chunk, uint32_t seq) const;
     std::vector<Packet> fill_window(std::chrono::steady_clock::time_point now);
-    std::vector<Packet> deliver_in_order();
+    std::vector<Packet> deliver_in_order(std::chrono::steady_clock::time_point now);
+    bool should_retransmit(const InFlight& slot,
+                           std::chrono::steady_clock::time_point now) const;
+    uint8_t jitter_priority(FrameType ft) const;
+    void deliver_from_jitter(std::chrono::steady_clock::time_point now);
 
     Role role_;
     sockaddr_in peer_{};
@@ -79,6 +92,9 @@ private:
     bool failed_{false};
     bool fin_sent_{false};
     bool fin_received_{false};
+    bool media_mode_{false};
+    uint64_t stream_start_us_{0};
+    bool stream_start_set_{false};
 
     uint32_t next_seq_{0};
     uint32_t next_expected_{0};
@@ -87,9 +103,11 @@ private:
 
     std::map<uint32_t, InFlight> in_flight_;
     std::map<uint32_t, Packet> reorder_;
+    std::unique_ptr<MediaSource> media_source_;
+    std::unique_ptr<MediaSink> media_sink_;
     RtoEstimator rto_;
-    RateController rate_controller_{1'000'000};  // Start at 1 Mbps
-    JitterBuffer jitter_buffer_{50};              // 50ms target depth
+    RateController rate_controller_{1'000'000};
+    JitterBuffer jitter_buffer_{50};
     Stats stats_{};
     int handshake_retries_{0};
     std::chrono::steady_clock::time_point last_handshake_sent_{};

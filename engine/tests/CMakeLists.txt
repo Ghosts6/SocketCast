@@ -25,3 +25,19 @@ add_test(NAME test_jitter_buffer COMMAND test_jitter_buffer)
 add_executable(test_rate_controller test_rate_controller.cpp)
 target_link_libraries(test_rate_controller PRIVATE socketcast_core)
 add_test(NAME test_rate_controller COMMAND test_rate_controller)
+
+add_executable(test_nal_parser test_nal_parser.cpp)
+target_link_libraries(test_nal_parser PRIVATE socketcast_core)
+add_test(NAME test_nal_parser COMMAND test_nal_parser)
+
+add_executable(test_media_source test_media_source.cpp)
+target_link_libraries(test_media_source PRIVATE socketcast_core)
+add_test(NAME test_media_source COMMAND test_media_source)
+
+add_executable(test_media_session test_media_session.cpp)
+target_link_libraries(test_media_session PRIVATE socketcast_core)
+add_test(NAME test_media_session COMMAND test_media_session)
+
+add_executable(test_media_sink test_media_sink.cpp)
+target_link_libraries(test_media_sink PRIVATE socketcast_core)
+add_test(NAME test_media_sink COMMAND test_media_sink)
