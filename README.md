@@ -7,7 +7,7 @@
 ![Docker](https://img.shields.io/badge/Docker-Kubernetes-2496ED.svg)
 ![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)
 
-> **Status:** 🚧  early development (Phases 0–2: spec frozen, selective-repeat + rate control + jitter buffering complete; dummy UDP packets validated. Phases 3–4 start media integration). This note comes down once the core transport (Phases 0–4) ships end-to-end.
+> **Status:** 🚧 Early development — Phases 0–4 complete (protocol, transport, rate control, media integration, native client MVP). Phases 5–8 (control plane, dashboard, hardening) on roadmap.
 
 A custom reliable-UDP transport protocol designed and built from scratch for real-time video streaming.
 
@@ -98,59 +98,166 @@ Loss rate and RTT trend are monitored together to detect congestion *before* sev
 * **Layer 4 - Interface:** React, TypeScript, Tailwind CSS.
 * **Layer 5 - Infrastructure:** Docker (multi-stage builds), Kubernetes, `tc netem` for network-condition testing, libFuzzer for parser hardening.
 
-## Getting Started (Development)
+## Building from Source
 
-Prerequisites: Docker, Docker Compose, a C++17 compiler + CMake (for the native client, which is not containerized - see below).
+**Prerequisites:** C++17 compiler, CMake 3.16+, optionally Docker & SDL2.
+
+### Engine (C++ Transport & Streaming)
 
 ```bash
-git clone https://github.com/kiarashbashokian/SocketCast.git
-cd SocketCast
+# Build with tests
+cmake -S engine -B engine/build -DSOCKETCAST_BUILD_TESTS=ON
+cmake --build engine/build
+ctest --test-dir engine/build --output-on-failure
+```
 
-# Build and run the engine, control-plane API, dashboard, and Redis
+### Native Client (C++ Playback)
+
+```bash
+# Builds with SDL2 if available (headless fallback if not)
+cmake -S client -B client/build
+cmake --build client/build
+```
+
+### Full Stack (Docker)
+
+```bash
 docker-compose build
 docker-compose up -d
 ```
 
-**Native client** (speaks the protocol directly - intentionally not dockerized, it's a GUI app):
+## Scripts & Demo Tools
+
+All scripts are in `scripts/` and assume you're in the repo root.
+
+### `dev-setup.sh`
+**Purpose:** Install development dependencies (CMake, build tools, optional SDL2).
+
 ```bash
-cmake -S client -B client/build
-cmake --build client/build
-./client/build/socketcast_client
+./scripts/dev-setup.sh
 ```
 
-**Phase 1 dummy exchange** (two processes, no video):
-```bash
-cmake -S engine -B engine/build -DSOCKETCAST_BUILD_TESTS=ON
-cmake --build engine/build
-ctest --test-dir engine/build --output-on-failure
+---
 
-# or: listen in one terminal, send in another
-./engine/build/socketcast_engine listen --bind 127.0.0.1 --port 5000
-./engine/build/socketcast_engine send --host 127.0.0.1 --port 5000 --count 100
-# equivalent: ./scripts/phase1-loopback.sh
+### `phase1-loopback.sh`
+**Purpose:** Test basic transport — send 100 dummy packets to localhost, verify ACK/NACK, measure no retransmits.
+
+```bash
+./scripts/phase1-loopback.sh
 ```
 
-**Phase 3 media streaming** (H.264 over SocketCast; requires `ffmpeg` in PATH for non-`.h264` inputs):
+**Output:** Packet sequence, ACK count, retransmit count. All 100 should be delivered with 0 retransmits on clean network.
+
+---
+
+### `phase2-benchmark.sh`
+**Purpose:** Validate rate control & jitter buffer under network conditions (loss, latency, jitter) using `tc netem`.
+
 ```bash
-./engine/build/socketcast_engine listen --bind 127.0.0.1 --port 5000 --output received.h264
-./engine/build/socketcast_engine stream --host 127.0.0.1 --port 5000 --input video.mp4
-# or: ./scripts/phase3-stream.sh video.mp4 received.h264
+sudo ./scripts/phase2-benchmark.sh
 ```
 
-**Simulate packet loss / latency** (Linux, requires root):
+**Runs:** 6 test scenarios:
+- 0% loss, 0ms latency (baseline)
+- 5% loss
+- 10% loss
+- 50ms latency
+- 5% loss + 50ms latency
+- 5% loss + 50ms latency + 10ms jitter
+
+**Output:** ACK count and retransmit count for each scenario.
+
+---
+
+### `phase3-stream.sh`
+**Purpose:** End-to-end media streaming — server encodes/streams H.264, listener writes received frames to file.
+
 ```bash
-sudo ./scripts/netem-loss.sh 5 50   # 5% loss, 50ms delay
-sudo ./scripts/netem-reset.sh       # remove
+./scripts/phase3-stream.sh input.h264 [output.h264] [port]
 ```
 
-**Phase 2 reliability & rate control validation** (automatic benchmark suite under loss/latency/jitter):
+**Examples:**
 ```bash
-sudo ./scripts/phase2-benchmark.sh  # run full suite with tc netem injection
+./scripts/phase3-stream.sh video.h264 received.h264 5000
+./scripts/phase3-stream.sh video.mp4                      # ffmpeg auto-encodes
+```
+
+**Output:** Received file (Annex B H.264) if streaming succeeded.
+
+---
+
+### `phase4-demo.sh`
+**Purpose:** Native client playback demo — stream from engine, client receives and displays.
+
+```bash
+./scripts/phase4-demo.sh input.h264 [port]
+```
+
+**Examples:**
+```bash
+./scripts/phase4-demo.sh video.h264 5000
+```
+
+**Output:** Client statistics (packets received, bitrate, frame count). With SDL2: video rendered in window.
+
+---
+
+### `netem-loss.sh` & `netem-reset.sh`
+**Purpose:** Manually inject network conditions on loopback (Linux, requires root).
+
+```bash
+# Inject 5% loss, 50ms delay
+sudo ./scripts/netem-loss.sh 5 50
+
+# Run tests while active...
+
+# Remove
+sudo ./scripts/netem-reset.sh
+```
+
+---
+
+## CLI Tools (Built Binaries)
+
+### `engine/build/socketcast_engine`
+
+**listen** — Start receiver
+
+```bash
+./engine/build/socketcast_engine listen [--bind ADDR] [--port N] [--output FILE.h264]
+```
+
+**send** — Send dummy packets
+
+```bash
+./engine/build/socketcast_engine send --host ADDR --port N [--count N] [--size N]
+```
+
+**stream** — Stream real video
+
+```bash
+./engine/build/socketcast_engine stream --host ADDR --port N --input FILE [--fps N]
+```
+
+### `client/build/socketcast_client`
+
+**Connect to server and receive**
+
+```bash
+./client/build/socketcast_client SERVER [PORT]
+```
+
+Example:
+```bash
+./client/build/socketcast_client 127.0.0.1 5000
 ```
 
 ## Documentation
 
-**🚧 to be complete**
+- **[Protocol Specification](Doc/protocol.md)** — Detailed v1 protocol: packet format, handshake, error recovery, rate control, jitter buffer, deadline-based drop logic, examples
+- **[API Reference](Doc/api.md)** — C++ Engine API (Transport, Packet, Session, RateController, JitterBuffer, MediaSource/Sink) + Native Client API + CLI tools; FastAPI (Phase 5) placeholder
+- **[Architecture & Decisions](Doc/dev/04-architecture-and-tech-decisions.md)** — Design rationale, tech choices, scope decisions
+- **[Current Status](Doc/dev/05-current-status-and-start.md)** — What's implemented (Phases 0–3 complete, Phase 4 in progress), how to build
 
 ## Project Roadmap
 
@@ -159,7 +266,7 @@ sudo ./scripts/phase2-benchmark.sh  # run full suite with tc netem injection
 - [x] Phase 1: Bare C++ transport engine (epoll, raw UDP, basic ACK/NACK)
 - [x] Phase 2: Reliability & rate control (selective-repeat ARQ, jitter buffer, token-bucket + RTT-trend backoff, `tc netem` validated)
 - [x] Phase 3: Media integration (FFmpeg chunking, NAL-unit frame classification, playback-deadline drop)
-- [ ] Phase 4: Native client (SDL2/OpenCV playback, speaks the protocol directly)
+- [x] Phase 4: Native client (SDL2/OpenCV playback, speaks the protocol directly, headless fallback)
 
 **Extended (Phases 5–8)** - production-shaped polish:
 - [ ] Phase 5: Python control plane (FastAPI, Redis session state, WebSocket bridge)

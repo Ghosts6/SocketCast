@@ -102,3 +102,10 @@ dashboard/.vite/
 Doc/dev/
 .ai/
 Resource/
+
+# dashboard
+dashboard/node_modules/
+dashboard/dist/
+dashboard/.vite/
+dashboard/package-lock.json
+dashboard/yarn.lock
