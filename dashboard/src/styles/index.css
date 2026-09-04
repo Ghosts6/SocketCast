@@ -1,3 +1,27 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+@layer base {
+  html {
+    @apply scroll-smooth;
+  }
+
+  body {
+    @apply bg-transparent text-neutral-100 transition-colors duration-200;
+  }
+
+  html:not(.dark) body {
+    @apply bg-neutral-50 text-neutral-900;
+  }
+
+  html.dark body {
+    @apply bg-neutral-950 text-neutral-100;
+  }
+}
+
+@layer components {
+  .glass {
+    @apply bg-neutral-900/50 dark:bg-neutral-950/50 backdrop-blur-md;
+  }
+}
