@@ -1,12 +1,7 @@
-"""Placeholder test — replace once app wiring is real."""
-from fastapi.testclient import TestClient
-
-from app.main import app
-
-client = TestClient(app)
+"""Health endpoint."""
 
 
-def test_healthz():
+def test_healthz(client):
     response = client.get("/healthz")
     assert response.status_code == 200
     assert response.json() == {"status": "ok"}

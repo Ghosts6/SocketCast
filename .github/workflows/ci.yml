@@ -21,15 +21,19 @@ jobs:
 
   control-plane:
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: control-plane
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: "3.12"
       - name: Install deps
-        run: pip install -r control-plane/requirements-dev.txt
+        run: pip install -r requirements-dev.txt
       - name: Test
-        run: cd control-plane && pytest
+        run: pytest -q --cov=app --cov-report=term-missing
+        # Redis is mocked in tests/conftest.py — no Redis service required.
 
   dashboard:
     runs-on: ubuntu-latest

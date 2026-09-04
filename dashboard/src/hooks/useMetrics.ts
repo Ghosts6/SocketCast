@@ -1,6 +1,8 @@
 import { useState, useEffect, useCallback } from "react";
 import type { StreamMetrics } from "../types";
 
+const WS_BASE = import.meta.env.VITE_WS_BASE || "ws://localhost:8000/ws";
+
 const DEFAULT_METRICS: StreamMetrics = {
   framesReceived: 0,
   packetsReceived: 0,
@@ -11,33 +13,64 @@ const DEFAULT_METRICS: StreamMetrics = {
   rttMs: 0,
 };
 
-export function useMetrics(connected: boolean) {
+export function useMetrics(connected: boolean, sessionId?: string) {
   const [metrics, setMetrics] = useState<StreamMetrics>(DEFAULT_METRICS);
   const [wsConnected, setWsConnected] = useState(false);
 
   useEffect(() => {
-    if (!connected) return;
-
-    // Phase 5: Replace with real WebSocket to FastAPI metrics endpoint
-    // For now, simulate with incremental updates
-    const interval = setInterval(() => {
-      setMetrics((prev) => ({
-        framesReceived: prev.framesReceived + Math.random() > 0.8 ? 1 : 0,
-        packetsReceived: prev.packetsReceived + (Math.floor(Math.random() * 10) + 5),
-        bytesReceived: prev.bytesReceived + Math.floor(Math.random() * 50000),
-        currentBitrateMbps: 1.0 + (Math.random() - 0.5) * 0.2,
-        jitterMs: 45 + (Math.random() - 0.5) * 20,
-        lossPercent: Math.max(0, (Math.random() - 0.95) * 2),
-        rttMs: 50 + (Math.random() - 0.5) * 30,
-      }));
-    }, 1000);
-
-    setWsConnected(true);
-    return () => {
-      clearInterval(interval);
+    if (!connected || !sessionId) {
       setWsConnected(false);
-    };
-  }, [connected]);
+      return;
+    }
+
+    let websocket: WebSocket | null = null;
+
+    try {
+      const wsUrl = `${WS_BASE}/metrics/${sessionId}`;
+      websocket = new WebSocket(wsUrl);
+
+      websocket.onopen = () => {
+        setWsConnected(true);
+      };
+
+      websocket.onmessage = (event) => {
+        try {
+          const message = JSON.parse(event.data);
+          if (message.type === "metrics" && message.data) {
+            const m = message.data;
+            setMetrics({
+              framesReceived: m.frames_received || 0,
+              packetsReceived: m.packets_received || 0,
+              bytesReceived: m.bytes_received || 0,
+              currentBitrateMbps: m.bitrate_mbps || 0,
+              jitterMs: m.jitter_ms || 0,
+              lossPercent: m.loss_percent || 0,
+              rttMs: m.rtt_ms || 0,
+            });
+          }
+        } catch (err) {
+          console.error("Failed to parse metrics:", err);
+        }
+      };
+
+      websocket.onerror = () => {
+        setWsConnected(false);
+      };
+
+      websocket.onclose = () => {
+        setWsConnected(false);
+      };
+
+      return () => {
+        if (websocket) {
+          websocket.close();
+        }
+      };
+    } catch (err) {
+      console.error("WebSocket connection error:", err);
+      setWsConnected(false);
+    }
+  }, [connected, sessionId]);
 
   const reset = useCallback(() => {
     setMetrics(DEFAULT_METRICS);

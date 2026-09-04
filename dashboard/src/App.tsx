@@ -21,7 +21,7 @@ function LoadingSpinner() {
 
 function App() {
   const { session, loading, connect, disconnect } = useSession();
-  const { metrics, wsConnected } = useMetrics(session.connected);
+  const { metrics, wsConnected } = useMetrics(session.connected, session.sessionId);
 
   return (
     <div className="min-h-screen text-neutral-100 dark:text-neutral-100 flex flex-col overflow-x-hidden relative">
