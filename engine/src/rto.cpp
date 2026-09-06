@@ -35,4 +35,12 @@ std::chrono::microseconds RtoEstimator::currentRto() const {
     return std::chrono::microseconds(rto);
 }
 
+double RtoEstimator::currentRttMs() const {
+    return srtt_us_ / 1000.0;
+}
+
+double RtoEstimator::currentJitterMs() const {
+    return rttvar_us_ / 1000.0;
+}
+
 }  // namespace socketcast

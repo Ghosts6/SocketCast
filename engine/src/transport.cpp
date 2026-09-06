@@ -43,7 +43,7 @@ void set_nonblock(int fd) {
 }  // namespace
 
 Transport::Transport(std::string bind_address, uint16_t port)
-    : bind_address_(std::move(bind_address)), port_(port) {
+    : bind_address_(std::move(bind_address)), port_(port), frame_buffer_(std::make_unique<FrameBuffer>()) {
     sock_ = ::socket(AF_INET, SOCK_DGRAM, 0);
     if (sock_ < 0) {
         throw std::runtime_error("socket() failed");
@@ -168,6 +168,16 @@ void Transport::on_readable() {
         }
         auto replies = session_->on_packet(*parsed, now);
         send_packets(replies, session_->peer());
+
+        // Phase 5b: capture media frames
+        if (parsed->header.packet_type == PacketType::Data &&
+            parsed->header.frame_type == FrameType::Keyframe && !parsed->payload.empty()) {
+            uint64_t ts_us = std::chrono::duration_cast<std::chrono::microseconds>(
+                                  now.time_since_epoch())
+                                  .count();
+            frame_buffer_->push_frame(parsed->payload, ts_us, true);
+        }
+
         if (rx_callback_) {
             rx_callback_(*parsed, session_->stats());
         }
@@ -217,6 +227,66 @@ void Transport::stop() {
             // best-effort wake; run() also times out every 10ms
         }
     }
+}
+
+bool Transport::start_admin_server(uint16_t admin_port) {
+    admin_server_ = std::make_unique<AdminServer>(admin_port);
+    admin_server_->set_start_stream_callback([this](const StreamRequest& req) {
+        return this->on_start_stream(req);
+    });
+    admin_server_->set_stop_stream_callback([this](const std::string& id) {
+        return this->on_stop_stream(id);
+    });
+    admin_server_->set_get_stats_callback([this](const std::string& id, StreamStats& stats) {
+        return this->on_get_stream_stats(id, stats);
+    });
+    return admin_server_->start();
+}
+
+std::string Transport::on_start_stream(const StreamRequest& req) {
+    // Generate stream ID
+    static uint32_t stream_counter = 0;
+    std::string stream_id = "stream_" + std::to_string(++stream_counter);
+
+    // Create a new session for this stream
+    try {
+        auto stream_session = std::make_unique<Session>(Session::Role::Initiator,
+                                                         make_addr(req.host, req.port));
+        auto source = std::make_unique<MediaSource>(req.input, req.fps);
+        if (!source->open()) {
+            return "";
+        }
+        stream_session->set_media_send(std::move(source));
+
+        active_streams_[stream_id] = std::move(stream_session);
+        return stream_id;
+    } catch (...) {
+        return "";
+    }
+}
+
+bool Transport::on_stop_stream(const std::string& stream_id) {
+    auto it = active_streams_.find(stream_id);
+    if (it == active_streams_.end()) {
+        return false;
+    }
+    active_streams_.erase(it);
+    return true;
+}
+
+bool Transport::on_get_stream_stats(const std::string& stream_id, StreamStats& stats) {
+    auto it = active_streams_.find(stream_id);
+    if (it == active_streams_.end()) {
+        return false;
+    }
+    const auto& session_stats = it->second->stats();
+    stats.rtt_ms = session_stats.rtt_ms;
+    stats.jitter_ms = session_stats.jitter_ms;
+    stats.frames_received = session_stats.frames_received;
+    stats.packets_received = session_stats.data_received;
+    stats.bytes_received = session_stats.media_bytes_received;
+    stats.data_sent = session_stats.data_sent;
+    return true;
 }
 
 }  // namespace socketcast

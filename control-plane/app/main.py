@@ -5,7 +5,7 @@ Session APIs and the browser bridge live here; protocol logic stays in C++.
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api import sessions, metrics
+from app.api import admin, metrics, sessions
 from app.bridge import websocket_bridge
 
 app = FastAPI(title="SocketCast Control Plane")
@@ -21,6 +21,7 @@ app.add_middleware(
 
 app.include_router(sessions.router, prefix="/api/sessions", tags=["sessions"])
 app.include_router(metrics.router, prefix="/api/metrics", tags=["metrics"])
+app.include_router(admin.router, prefix="/api/admin", tags=["admin"])
 app.include_router(websocket_bridge.router, tags=["bridge"])
 
 

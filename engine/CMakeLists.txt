@@ -25,6 +25,8 @@ add_library(socketcast_core
     src/nal_parser.cpp
     src/media_source.cpp
     src/media_sink.cpp
+    src/admin_server.cpp
+    src/frame_buffer.cpp
 )
 target_include_directories(socketcast_core PUBLIC include)
 

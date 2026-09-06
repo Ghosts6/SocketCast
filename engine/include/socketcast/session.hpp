@@ -37,6 +37,10 @@ public:
         uint64_t nacks_sent{0};
         uint64_t deadline_drops{0};
         uint64_t media_bytes_received{0};
+        // Phase 5b: metrics for control plane
+        double rtt_ms{0.0};
+        double jitter_ms{0.0};
+        uint64_t frames_received{0};
     };
 
     Session(Role role, sockaddr_in peer);

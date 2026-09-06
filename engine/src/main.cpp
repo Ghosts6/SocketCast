@@ -84,6 +84,8 @@ int main(int argc, char** argv) {
             if (!output_path.empty()) {
                 transport.configure_receive(output_path);
             }
+            // Phase 5b: start admin server for control plane
+            transport.start_admin_server(5001);
             std::cout << "SocketCast listen " << bind_addr << ":" << transport.bound_port();
             if (!output_path.empty()) {
                 std::cout << " -> " << output_path;

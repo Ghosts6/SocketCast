@@ -37,14 +37,14 @@ def test_metrics_ws_streams_payload(client, created_session):
 
 
 def test_stream_ws_stub_and_ping(client, created_session):
-    """Verify frame WS is a Phase 5b stub — status='stub' documents deferral."""
+    """Verify frame WS is Phase 5b (engine IPC in progress)."""
     sid = created_session["session_id"]
     with client.websocket_connect(f"/ws/stream/{sid}") as ws:
-        stub = ws.receive_json()
-        assert stub["type"] == "frame"
-        assert stub["status"] == "stub", "frame WS should be stub until Phase 5b engine IPC"
-        assert stub["session_id"] == sid
-        assert "Phase 5b" in stub["note"]
+        msg = ws.receive_json()
+        assert msg["type"] == "frame"
+        assert msg["status"] == "ready", "frame WS ready for Phase 5b streaming"
+        assert msg["session_id"] == sid
+        assert "Phase 5b" in msg["note"]
 
         ws.send_text("ping")
         pong = ws.receive_json()

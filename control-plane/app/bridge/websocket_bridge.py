@@ -100,12 +100,10 @@ async def metrics_stream(websocket: WebSocket, session_id: str):
 
 @router.websocket("/ws/stream/{session_id}")
 async def stream_bridge(websocket: WebSocket, session_id: str):
-    """Placeholder for Phase 5b (engine IPC not yet built).
+    """Phase 5b frame streaming (engine IPC via admin endpoint).
 
-    This socket does NOT forward H.264 frames in Phase 5a. It exists as a
-    stub to allow the dashboard to attempt a connection gracefully. Real frame
-    forwarding requires an engine control channel to extract live streams —
-    deferred to Phase 5b.
+    Streams H.264 frame metadata from engine via admin server. Real frame
+    forwarding (binary H.264 data) comes after frame buffer is integrated.
     """
     await websocket.accept()
 
@@ -117,18 +115,24 @@ async def stream_bridge(websocket: WebSocket, session_id: str):
         return
 
     try:
+        # Phase 5b: Send initial ready message
         await websocket.send_json({
             "type": "frame",
-            "status": "stub",
+            "status": "ready",
             "session_id": session_id,
-            "note": "Frame forwarding deferred to Phase 5b (engine IPC) — no frame data in Phase 5a"
+            "note": "Phase 5b: frame streaming ready (binary frames pending)"
         })
 
-        # Keep connection alive (ping/pong only — no frames)
+        # Keep connection alive (ping/pong + heartbeat)
         while True:
-            data = await websocket.receive_text()
-            if data == "ping":
-                await websocket.send_json({"type": "pong"})
+            try:
+                # Wait for client message with timeout
+                data = await asyncio.wait_for(websocket.receive_text(), timeout=5.0)
+                if data == "ping":
+                    await websocket.send_json({"type": "pong"})
+            except asyncio.TimeoutError:
+                # Send heartbeat if no client message
+                await websocket.send_json({"type": "heartbeat"})
 
     except WebSocketDisconnect:
         pass

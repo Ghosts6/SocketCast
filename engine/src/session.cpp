@@ -148,6 +148,7 @@ void Session::deliver_from_jitter(std::chrono::steady_clock::time_point now) {
             break;
         }
         // Jitter buffer stores metadata only; payload is written in deliver_in_order.
+        // Phase 5b: count keyframes as received frames
         (void)pkt;
     }
 }
@@ -219,6 +220,11 @@ std::vector<Packet> Session::deliver_in_order(std::chrono::steady_clock::time_po
         if (media_sink_) {
             media_sink_->write(pkt.payload);
             stats_.media_bytes_received += pkt.payload.size();
+        }
+
+        // Phase 5b: count keyframes as frame boundaries
+        if (pkt.header.frame_type == FrameType::Keyframe) {
+            ++stats_.frames_received;
         }
 
         jitter_buffer_.push(next_expected_, arrival_us,
@@ -354,6 +360,10 @@ std::vector<Packet> Session::on_tick(std::chrono::steady_clock::time_point now) 
     std::vector<Packet> out;
     rate_controller_.onTick(now);
     const auto rto = rto_.currentRto();
+
+    // Phase 5b: update metrics for control plane
+    stats_.rtt_ms = rto_.currentRttMs();
+    stats_.jitter_ms = rto_.currentJitterMs();
 
     if (state_ == SessionState::Handshaking) {
         if (last_handshake_sent_.time_since_epoch().count() == 0) {

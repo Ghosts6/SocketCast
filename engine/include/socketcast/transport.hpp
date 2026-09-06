@@ -1,11 +1,14 @@
 #pragma once
 // UDP + epoll event loop.
 
+#include "socketcast/admin_server.hpp"
+#include "socketcast/frame_buffer.hpp"
 #include "socketcast/session.hpp"
 
 #include <atomic>
 #include <cstdint>
 #include <functional>
+#include <map>
 #include <memory>
 #include <string>
 
@@ -39,9 +42,17 @@ public:
     void run();
     void stop();
 
+    // Phase 5b: start admin server for control plane
+    bool start_admin_server(uint16_t admin_port = 5001);
+
 private:
     void send_packets(const std::vector<Packet>& packets, const sockaddr_in& peer);
     void on_readable();
+
+    // Admin server callbacks
+    std::string on_start_stream(const StreamRequest& req);
+    bool on_stop_stream(const std::string& stream_id);
+    bool on_get_stream_stats(const std::string& stream_id, StreamStats& stats);
 
     std::string bind_address_;
     uint16_t port_{0};
@@ -53,6 +64,9 @@ private:
     Mode mode_{Mode::Listen};
     std::unique_ptr<Session> session_;
     RxCallback rx_callback_;
+    std::unique_ptr<AdminServer> admin_server_;
+    std::map<std::string, std::unique_ptr<Session>> active_streams_;
+    std::unique_ptr<FrameBuffer> frame_buffer_;
 };
 
 }  // namespace socketcast

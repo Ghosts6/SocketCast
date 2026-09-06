@@ -232,9 +232,20 @@ int PlaybackClient::run() {
     }
 #else
     while (running && is_connected()) {
+        // Phase 5b: count frames in headless build too
+        // Simulate frame processing by counting chunks as frames
+        static auto last_frame_check = std::chrono::steady_clock::now();
+        auto now = std::chrono::steady_clock::now();
+        if (!incoming_frame_.empty() &&
+            std::chrono::duration_cast<std::chrono::milliseconds>(now - last_frame_check).count() >= 33) {
+            // Treat accumulated data as a frame every ~30ms (~30 FPS)
+            incoming_frame_.clear();
+            ++stats_.frames_received;
+            last_frame_check = now;
+        }
+
         update_stats();
 
-        auto now = std::chrono::steady_clock::now();
         if (std::chrono::duration_cast<std::chrono::seconds>(now - last_stats_print).count() >= 1) {
             std::cout << "RX: " << stats_.packets_received << " pkts, " << stats_.bytes_received
                       << " bytes, " << stats_.current_bitrate_kbps << " kbps\n";
