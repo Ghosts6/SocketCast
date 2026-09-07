@@ -10,7 +10,9 @@
 #include <functional>
 #include <map>
 #include <memory>
+#include <mutex>
 #include <string>
+#include <vector>
 
 namespace socketcast {
 
@@ -42,7 +44,7 @@ public:
     void run();
     void stop();
 
-    // Phase 5b: start admin server for control plane
+    // Start admin server for control plane communication
     bool start_admin_server(uint16_t admin_port = 5001);
 
 private:
@@ -53,6 +55,10 @@ private:
     std::string on_start_stream(const StreamRequest& req);
     bool on_stop_stream(const std::string& stream_id);
     bool on_get_stream_stats(const std::string& stream_id, StreamStats& stats);
+    std::string on_get_frames();
+
+    void wakeup_loop();
+    void start_pending_streams();
 
     std::string bind_address_;
     uint16_t port_{0};
@@ -65,8 +71,15 @@ private:
     std::unique_ptr<Session> session_;
     RxCallback rx_callback_;
     std::unique_ptr<AdminServer> admin_server_;
+    std::mutex active_streams_mutex_;
     std::map<std::string, std::unique_ptr<Session>> active_streams_;
+    std::vector<std::string> pending_stream_starts_;
     std::unique_ptr<FrameBuffer> frame_buffer_;
+
+    // Frame accumulation: flush when a new Annex B start code begins a NAL
+    std::vector<uint8_t> frame_accumulator_;
+    FrameType last_frame_type_{FrameType::Keyframe};
+    uint64_t last_frame_timestamp_us_{0};
 };
 
 }  // namespace socketcast

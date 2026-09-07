@@ -1,9 +1,12 @@
 """WebSocket bridge for real-time metrics & frame streaming to dashboard."""
 import asyncio
+import base64
 import json
 import random
 from datetime import datetime, UTC
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect, HTTPException
+
+import httpx
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 from app.core.redis_client import redis_client
 from app.core.config import settings
@@ -19,26 +22,22 @@ async def metrics_stream(websocket: WebSocket, session_id: str):
     """Stream real-time metrics to dashboard over WebSocket."""
     await websocket.accept()
 
-    # Check session exists
     session_key = f"session:{session_id}"
     session_data = await redis_client.get(session_key)
     if not session_data:
         await websocket.close(code=4004, reason="Session not found")
         return
 
-    # Register connection
     if session_id not in active_connections:
         active_connections[session_id] = []
     active_connections[session_id].append(websocket)
 
     try:
-        # Update session state to connected
         session = json.loads(session_data)
         session["state"] = "connected"
         session["connected_at"] = datetime.now(UTC).isoformat()
         await redis_client.setex(session_key, 3600, json.dumps(session))
 
-        # Stream metrics every second
         while True:
             metrics_key = f"metrics:{session_id}"
             metrics_data = await redis_client.get(metrics_key)
@@ -46,7 +45,6 @@ async def metrics_stream(websocket: WebSocket, session_id: str):
             if metrics_data:
                 metrics = json.loads(metrics_data)
             elif settings.socketcast_mock_metrics:
-                # Generate mock metrics only if explicitly enabled (demo/testing)
                 metrics = {
                     "session_id": session_id,
                     "bitrate_mbps": round(random.uniform(0.5, 5.0), 2),
@@ -59,7 +57,6 @@ async def metrics_stream(websocket: WebSocket, session_id: str):
                     "timestamp": datetime.now(UTC).isoformat(),
                 }
             else:
-                # No metrics available and mocking disabled
                 metrics = {
                     "session_id": session_id,
                     "bitrate_mbps": 0.0,
@@ -80,14 +77,12 @@ async def metrics_stream(websocket: WebSocket, session_id: str):
     except Exception as e:
         print(f"WebSocket error for session {session_id}: {str(e)}")
     finally:
-        # Unregister connection
         if session_id in active_connections:
             try:
                 active_connections[session_id].remove(websocket)
             except ValueError:
                 pass
 
-        # Update session state to disconnected
         try:
             session_data = await redis_client.get(session_key)
             if session_data:
@@ -100,14 +95,9 @@ async def metrics_stream(websocket: WebSocket, session_id: str):
 
 @router.websocket("/ws/stream/{session_id}")
 async def stream_bridge(websocket: WebSocket, session_id: str):
-    """Phase 5b frame streaming (engine IPC via admin endpoint).
-
-    Streams H.264 frame metadata from engine via admin server. Real frame
-    forwarding (binary H.264 data) comes after frame buffer is integrated.
-    """
+    """Stream H.264 Annex B NALs to the dashboard as binary WebSocket frames."""
     await websocket.accept()
 
-    # Check session exists
     session_key = f"session:{session_id}"
     session_data = await redis_client.get(session_key)
     if not session_data:
@@ -115,24 +105,54 @@ async def stream_bridge(websocket: WebSocket, session_id: str):
         return
 
     try:
-        # Phase 5b: Send initial ready message
         await websocket.send_json({
             "type": "frame",
             "status": "ready",
             "session_id": session_id,
-            "note": "Phase 5b: frame streaming ready (binary frames pending)"
+            "note": "Binary H.264 Annex B frames from engine",
         })
 
-        # Keep connection alive (ping/pong + heartbeat)
-        while True:
-            try:
-                # Wait for client message with timeout
-                data = await asyncio.wait_for(websocket.receive_text(), timeout=5.0)
-                if data == "ping":
-                    await websocket.send_json({"type": "pong"})
-            except asyncio.TimeoutError:
-                # Send heartbeat if no client message
-                await websocket.send_json({"type": "heartbeat"})
+        engine_admin_url = f"http://{settings.engine_host}:{settings.engine_control_port}"
+        last_heartbeat = 0.0
+
+        async with httpx.AsyncClient(timeout=1.0) as client:
+            while True:
+                # Client control messages (text ping)
+                try:
+                    message = await asyncio.wait_for(websocket.receive(), timeout=0.05)
+                    if message.get("type") == "websocket.disconnect":
+                        break
+                    text = message.get("text")
+                    if text == "ping":
+                        await websocket.send_json({"type": "pong"})
+                except asyncio.TimeoutError:
+                    pass
+
+                frames_data = None
+                try:
+                    resp = await client.get(f"{engine_admin_url}/admin/frames")
+                    if resp.status_code == 200:
+                        frames_data = resp.json()
+                except Exception:
+                    frames_data = None
+
+                frames = (frames_data or {}).get("frames") or []
+                if frames:
+                    for frame in frames:
+                        b64 = frame.get("data_base64") or ""
+                        if not b64:
+                            continue
+                        try:
+                            raw = base64.b64decode(b64)
+                        except Exception:
+                            continue
+                        if raw:
+                            await websocket.send_bytes(raw)
+                else:
+                    now = asyncio.get_event_loop().time()
+                    if now - last_heartbeat >= 1.0:
+                        await websocket.send_json({"type": "heartbeat"})
+                        last_heartbeat = now
 
     except WebSocketDisconnect:
         pass

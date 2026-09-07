@@ -3,27 +3,28 @@ import { useStream } from "../hooks/useStream";
 
 interface StreamCanvasProps {
   connected: boolean;
+  sessionId?: string;
 }
 
-export function StreamCanvas({ connected }: StreamCanvasProps) {
+export function StreamCanvas({ connected, sessionId }: StreamCanvasProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [fps, setFps] = useState(0);
-  const frameCountRef = useRef(0);
   const lastCountRef = useRef(0);
 
-  useStream(canvasRef, connected);
+  const { frameCount } = useStream(canvasRef, connected, sessionId);
 
   // FPS counter
   useEffect(() => {
     if (!connected) return;
 
     const interval = setInterval(() => {
-      setFps(frameCountRef.current - lastCountRef.current);
-      lastCountRef.current = frameCountRef.current;
+      const current = frameCount.current;
+      setFps(current - lastCountRef.current);
+      lastCountRef.current = current;
     }, 1000);
 
     return () => clearInterval(interval);
-  }, [connected]);
+  }, [connected, frameCount]);
 
   useEffect(() => {
     if (canvasRef.current && !connected) {

@@ -8,8 +8,9 @@ bool FrameBuffer::push_frame(const std::vector<uint8_t>& data, uint64_t timestam
                              bool is_keyframe) {
     std::lock_guard<std::mutex> lock(mutex_);
 
+    // Drop oldest frame if buffer is full
     if (buffer_.size() >= max_frames_) {
-        return false;  // Buffer full
+        buffer_.erase(buffer_.begin());
     }
 
     auto frame = std::make_shared<Frame>();

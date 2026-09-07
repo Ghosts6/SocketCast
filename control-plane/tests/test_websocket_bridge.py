@@ -1,9 +1,10 @@
 """WebSocket bridge tests (mocked Redis via conftest)."""
+import base64
+from unittest.mock import AsyncMock, MagicMock, patch
 
 
 def test_metrics_ws_unknown_session(client):
     with client.websocket_connect("/ws/metrics/unknown-id") as ws:
-        # Server accepts then closes with 4004 — Starlette raises on receive.
         try:
             ws.receive_json()
             closed_cleanly = False
@@ -36,19 +37,56 @@ def test_metrics_ws_streams_payload(client, created_session):
         assert message["data"]["session_id"] == sid
 
 
-def test_stream_ws_stub_and_ping(client, created_session):
-    """Verify frame WS is Phase 5b (engine IPC in progress)."""
+def test_stream_ws_ready_ping_and_binary(client, created_session):
+    """Ready JSON, ping/pong, then binary Annex B when engine has frames."""
     sid = created_session["session_id"]
-    with client.websocket_connect(f"/ws/stream/{sid}") as ws:
-        msg = ws.receive_json()
-        assert msg["type"] == "frame"
-        assert msg["status"] == "ready", "frame WS ready for Phase 5b streaming"
-        assert msg["session_id"] == sid
-        assert "Phase 5b" in msg["note"]
+    raw = bytes([0x00, 0x00, 0x00, 0x01, 0x67, 0x42, 0x00, 0x1E])
 
-        ws.send_text("ping")
-        pong = ws.receive_json()
-        assert pong["type"] == "pong"
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.json.return_value = {
+        "frames": [
+            {
+                "timestamp_us": 1,
+                "is_keyframe": True,
+                "data_base64": base64.b64encode(raw).decode("ascii"),
+            }
+        ]
+    }
+    mock_client = MagicMock()
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=None)
+    mock_client.get = AsyncMock(return_value=mock_resp)
+
+    with patch("app.bridge.websocket_bridge.httpx.AsyncClient", return_value=mock_client):
+        with client.websocket_connect(f"/ws/stream/{sid}") as ws:
+            msg = ws.receive_json()
+            assert msg["type"] == "frame"
+            assert msg["status"] == "ready"
+            assert msg["session_id"] == sid
+            assert "binary" in msg["note"].lower() or "h.264" in msg["note"].lower()
+
+            ws.send_text("ping")
+            # May receive binary and/or pong; drain until pong
+            saw_pong = False
+            saw_binary = False
+            for _ in range(8):
+                data = ws.receive()
+                if "text" in data:
+                    import json
+
+                    payload = json.loads(data["text"])
+                    if payload.get("type") == "pong":
+                        saw_pong = True
+                    if payload.get("type") == "heartbeat":
+                        continue
+                elif "bytes" in data:
+                    assert data["bytes"] == raw
+                    saw_binary = True
+                if saw_pong and saw_binary:
+                    break
+            assert saw_pong
+            assert saw_binary
 
 
 def test_stream_ws_unknown_session(client):

@@ -1,10 +1,11 @@
 #pragma once
-// HTTP admin server for Phase 5b control plane communication.
+// HTTP admin server for control plane communication.
 // Listens on 127.0.0.1:5001 and exposes:
 // - GET /admin/health
 // - POST /admin/streams (start stream)
 // - DELETE /admin/streams/{id} (stop stream)
 // - GET /admin/streams/{id}/stats
+// - GET /admin/frames (retrieve buffered frames)
 
 #include <atomic>
 #include <functional>
@@ -51,10 +52,12 @@ public:
     using StartStreamCallback = std::function<std::string(const StreamRequest&)>;
     using StopStreamCallback = std::function<bool(const std::string&)>;
     using GetStatsCallback = std::function<bool(const std::string&, StreamStats&)>;
+    using GetFramesCallback = std::function<std::string()>;
 
     void set_start_stream_callback(StartStreamCallback cb) { start_stream_cb_ = cb; }
     void set_stop_stream_callback(StopStreamCallback cb) { stop_stream_cb_ = cb; }
     void set_get_stats_callback(GetStatsCallback cb) { get_stats_cb_ = cb; }
+    void set_get_frames_callback(GetFramesCallback cb) { get_frames_cb_ = cb; }
 
 private:
     static constexpr int kBacklog = 5;
@@ -69,6 +72,7 @@ private:
     StartStreamCallback start_stream_cb_;
     StopStreamCallback stop_stream_cb_;
     GetStatsCallback get_stats_cb_;
+    GetFramesCallback get_frames_cb_;
 
     void run_server();
     void handle_connection(int client_fd);

@@ -6,6 +6,7 @@
 #include <netinet/in.h>
 #include <sstream>
 #include <sys/socket.h>
+#include <sys/time.h>
 #include <unistd.h>
 
 namespace socketcast {
@@ -75,15 +76,19 @@ void AdminServer::stop() {
 }
 
 void AdminServer::run_server() {
+    // Set socket timeout for graceful shutdown (1 second)
+    struct timeval tv{};
+    tv.tv_sec = 1;
+    tv.tv_usec = 0;
+    setsockopt(listen_fd_, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+
     while (running_.load()) {
         sockaddr_in client_addr{};
         socklen_t client_len = sizeof(client_addr);
 
         int client_fd = accept(listen_fd_, reinterpret_cast<sockaddr*>(&client_addr), &client_len);
         if (client_fd < 0) {
-            if (running_.load()) {
-                std::cerr << "AdminServer: accept failed\n";
-            }
+            // Timeout or error; continue checking running_ flag
             continue;
         }
 
@@ -92,37 +97,88 @@ void AdminServer::run_server() {
 }
 
 void AdminServer::handle_connection(int client_fd) {
+    // Accepted sockets inherit listen RCVTIMEO; assemble a full request by
+    // honoring Content-Length (httpx often delivers headers/body in two reads).
+    struct timeval tv{};
+    tv.tv_sec = 2;
+    tv.tv_usec = 0;
+    setsockopt(client_fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+
+    std::string raw;
     char buffer[kBufferSize];
-    ssize_t nbytes = recv(client_fd, buffer, kBufferSize - 1, 0);
-    if (nbytes <= 0) {
+    size_t header_sep = std::string::npos;
+    size_t sep_len = 4;
+    size_t content_length = 0;
+    bool have_length = false;
+
+    while (raw.size() < static_cast<size_t>(kBufferSize)) {
+        const ssize_t nbytes = recv(client_fd, buffer, sizeof(buffer), 0);
+        if (nbytes <= 0) {
+            break;
+        }
+        raw.append(buffer, static_cast<size_t>(nbytes));
+
+        if (header_sep == std::string::npos) {
+            size_t pos = raw.find("\r\n\r\n");
+            sep_len = 4;
+            if (pos == std::string::npos) {
+                pos = raw.find("\n\n");
+                sep_len = 2;
+            }
+            if (pos != std::string::npos) {
+                header_sep = pos;
+                const std::string headers = raw.substr(0, header_sep);
+                size_t cl_pos = headers.find("Content-Length:");
+                if (cl_pos == std::string::npos) {
+                    cl_pos = headers.find("content-length:");
+                }
+                if (cl_pos != std::string::npos) {
+                    size_t v = cl_pos + 15;
+                    while (v < headers.size() && (headers[v] == ' ' || headers[v] == '\t')) {
+                        ++v;
+                    }
+                    try {
+                        content_length = static_cast<size_t>(std::stoul(headers.substr(v)));
+                        have_length = true;
+                    } catch (...) {
+                        have_length = false;
+                    }
+                }
+            }
+        }
+
+        if (header_sep != std::string::npos) {
+            const size_t body_start = header_sep + sep_len;
+            const size_t body_have = raw.size() > body_start ? raw.size() - body_start : 0;
+            if (!have_length || body_have >= content_length) {
+                break;
+            }
+        }
+    }
+
+    if (header_sep == std::string::npos) {
+        std::string response = http_response(400, json_error("missing headers/body separator"));
+        send(client_fd, response.c_str(), response.length(), 0);
         close(client_fd);
         return;
     }
-    buffer[nbytes] = '\0';
 
-    // Parse HTTP request (simple parser)
-    std::istringstream iss(buffer);
+    std::string headers = raw.substr(0, header_sep);
+    std::string body = raw.substr(header_sep + sep_len);
+    if (have_length && body.size() > content_length) {
+        body.resize(content_length);
+    }
+
+    std::istringstream iss(headers);
     std::string method, path, http_version;
-    iss >> method >> path >> http_version;
-
-    // Find empty line (end of headers)
-    std::string line;
-    std::string body;
-    bool in_body = false;
-    while (std::getline(iss, line)) {
-        if (line.empty() || line == "\r") {
-            in_body = true;
-            break;
-        }
-    }
-    if (in_body) {
-        std::getline(iss, body);
+    if (!(iss >> method >> path >> http_version)) {
+        std::string response = http_response(400, json_error("invalid request line"));
+        send(client_fd, response.c_str(), response.length(), 0);
+        close(client_fd);
+        return;
     }
 
-    // Handle request
     std::string response = handle_request(method, path, body);
-
-    // Send response
     send(client_fd, response.c_str(), response.length(), 0);
     close(client_fd);
 }
@@ -139,33 +195,76 @@ std::string AdminServer::handle_request(const std::string& method, const std::st
         if (!start_stream_cb_) {
             return http_response(500, json_error("no start stream callback"));
         }
-        // Parse JSON body (minimal: {"input":"...", "host":"...", "port":5000, "fps":30})
+        // Parse JSON body (tolerates whitespace after ':' like Python json.dumps)
         StreamRequest req;
-        // TODO: proper JSON parsing; for now use simple parsing
-        if (body.find("\"input\"") != std::string::npos) {
-            size_t start = body.find("\"input\"") + 9;
-            size_t end = body.find("\"", start + 1);
-            if (start < body.length() && end < body.length()) {
-                req.input = body.substr(start + 1, end - start - 1);
+        auto skip_ws = [](const std::string& s, size_t i) -> size_t {
+            while (i < s.size() && (s[i] == ' ' || s[i] == '\t' || s[i] == '\n' || s[i] == '\r')) {
+                ++i;
             }
-        }
-        if (body.find("\"host\"") != std::string::npos) {
-            size_t start = body.find("\"host\"") + 8;
-            size_t end = body.find("\"", start + 1);
-            if (start < body.length() && end < body.length()) {
-                req.host = body.substr(start + 1, end - start - 1);
+            return i;
+        };
+        auto extract_string = [&body, &skip_ws](const char* key) -> std::string {
+            std::string search = std::string("\"") + key + "\"";
+            size_t pos = body.find(search);
+            if (pos == std::string::npos) {
+                return "";
             }
-        }
+            size_t i = skip_ws(body, pos + search.length());
+            if (i >= body.size() || body[i] != ':') {
+                return "";
+            }
+            i = skip_ws(body, i + 1);
+            if (i >= body.size() || body[i] != '"') {
+                return "";
+            }
+            size_t start = i + 1;
+            size_t end = body.find('"', start);
+            if (end == std::string::npos || end <= start) {
+                return "";
+            }
+            return body.substr(start, end - start);
+        };
+        auto extract_number = [&body, &skip_ws](const char* key) -> int {
+            std::string search = std::string("\"") + key + "\"";
+            size_t pos = body.find(search);
+            if (pos == std::string::npos) {
+                return -1;
+            }
+            size_t i = skip_ws(body, pos + search.length());
+            if (i >= body.size() || body[i] != ':') {
+                return -1;
+            }
+            i = skip_ws(body, i + 1);
+            size_t end = i;
+            while (end < body.size() && (body[end] == '-' || (body[end] >= '0' && body[end] <= '9'))) {
+                ++end;
+            }
+            if (end <= i) {
+                return -1;
+            }
+            try {
+                return std::stoi(body.substr(i, end - i));
+            } catch (...) {
+                return -1;
+            }
+        };
+
+        req.input = extract_string("input");
+        req.host = extract_string("host");
         if (req.host.empty()) {
             req.host = "127.0.0.1";
         }
-        if (body.find("\"port\"") != std::string::npos) {
-            size_t start = body.find("\"port\"") + 7;
-            try {
-                req.port = static_cast<uint16_t>(std::stoi(body.substr(start)));
-            } catch (...) {
-                req.port = 5000;
-            }
+        int port_val = extract_number("port");
+        if (port_val > 0) {
+            req.port = static_cast<uint16_t>(port_val);
+        }
+        int fps_val = extract_number("fps");
+        if (fps_val > 0) {
+            req.fps = static_cast<uint32_t>(fps_val);
+        }
+
+        if (req.input.empty()) {
+            return http_response(400, json_error("missing input"));
         }
 
         std::string stream_id = start_stream_cb_(req);
@@ -211,6 +310,15 @@ std::string AdminServer::handle_request(const std::string& method, const std::st
             << stats.packets_received << R"(,"bytes_received":)" << stats.bytes_received
             << R"(,"data_sent":)" << stats.data_sent << "}";
         return http_response(200, oss.str());
+    }
+
+    // GET /admin/frames (retrieve accumulated frames as base64)
+    if (method == "GET" && path == "/admin/frames") {
+        if (!get_frames_cb_) {
+            return http_response(500, json_error("no get frames callback"));
+        }
+        std::string frames_json = get_frames_cb_();
+        return http_response(200, frames_json);
     }
 
     return http_response(404, json_error("not found"));

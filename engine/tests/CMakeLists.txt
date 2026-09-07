@@ -41,3 +41,7 @@ add_test(NAME test_media_session COMMAND test_media_session)
 add_executable(test_media_sink test_media_sink.cpp)
 target_link_libraries(test_media_sink PRIVATE socketcast_core)
 add_test(NAME test_media_sink COMMAND test_media_sink)
+
+add_executable(test_admin_server test_admin_server.cpp)
+target_link_libraries(test_admin_server PRIVATE socketcast_core Threads::Threads)
+add_test(NAME test_admin_server COMMAND test_admin_server)

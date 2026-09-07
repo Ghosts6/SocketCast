@@ -34,7 +34,7 @@ function App() {
           {/* Left: Stream + Session Control */}
           <div className="lg:col-span-2 space-y-4 md:space-y-6">
             <div className="transition-all duration-300">
-              <StreamCanvas connected={session.connected} />
+              <StreamCanvas connected={session.connected} sessionId={session.sessionId} />
             </div>
 
             <div className="transition-all duration-300">

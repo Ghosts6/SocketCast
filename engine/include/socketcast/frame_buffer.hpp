@@ -1,5 +1,5 @@
 #pragma once
-// Thread-safe ring buffer for H.264 frames (Phase 5b frame IPC).
+// Thread-safe ring buffer for H.264 frames.
 
 #include <cstdint>
 #include <deque>

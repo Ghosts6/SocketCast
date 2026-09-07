@@ -2,6 +2,7 @@
 
 #include "socketcast/media_sink.hpp"
 #include "socketcast/media_source.hpp"
+#include "socketcast/nal_parser.hpp"
 
 #include <arpa/inet.h>
 #include <cerrno>
@@ -10,6 +11,7 @@
 #include <fcntl.h>
 #include <netinet/in.h>
 #include <stdexcept>
+#include <sstream>
 #include <string>
 #include <sys/epoll.h>
 #include <sys/eventfd.h>
@@ -22,6 +24,30 @@ namespace {
 
 constexpr size_t kMaxDatagram = kHeaderSize + kMaxPayloadLength;
 constexpr int kEpollTimeoutMs = 10;
+
+// Simple base64 encoding
+std::string base64_encode(const std::vector<uint8_t>& data) {
+    static const char* base64_chars =
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    std::string result;
+    int val = 0;
+    int valb = 0;
+    for (uint8_t c : data) {
+        val = (val << 8) + c;
+        valb += 8;
+        while (valb >= 6) {
+            valb -= 6;
+            result.push_back(base64_chars[(val >> valb) & 0x3F]);
+        }
+    }
+    if (valb > 0) {
+        result.push_back(base64_chars[(val << (6 - valb)) & 0x3F]);
+    }
+    while (result.size() % 4) {
+        result.push_back('=');
+    }
+    return result;
+}
 
 sockaddr_in make_addr(const std::string& host, uint16_t port) {
     sockaddr_in addr{};
@@ -38,6 +64,30 @@ void set_nonblock(int fd) {
     if (flags < 0 || fcntl(fd, F_SETFL, flags | O_NONBLOCK) < 0) {
         throw std::runtime_error("fcntl O_NONBLOCK failed");
     }
+}
+
+bool starts_with_annex_b(const std::vector<uint8_t>& payload) {
+    if (payload.size() >= 4 && payload[0] == 0x00 && payload[1] == 0x00 &&
+        payload[2] == 0x00 && payload[3] == 0x01) {
+        return true;
+    }
+    if (payload.size() >= 3 && payload[0] == 0x00 && payload[1] == 0x00 &&
+        payload[2] == 0x01) {
+        return true;
+    }
+    return false;
+}
+
+size_t annex_b_header_len(const std::vector<uint8_t>& payload) {
+    if (payload.size() >= 4 && payload[0] == 0x00 && payload[1] == 0x00 &&
+        payload[2] == 0x00 && payload[3] == 0x01) {
+        return 4;
+    }
+    if (payload.size() >= 3 && payload[0] == 0x00 && payload[1] == 0x00 &&
+        payload[2] == 0x01) {
+        return 3;
+    }
+    return 0;
 }
 
 }  // namespace
@@ -169,13 +219,42 @@ void Transport::on_readable() {
         auto replies = session_->on_packet(*parsed, now);
         send_packets(replies, session_->peer());
 
-        // Phase 5b: capture media frames
-        if (parsed->header.packet_type == PacketType::Data &&
-            parsed->header.frame_type == FrameType::Keyframe && !parsed->payload.empty()) {
-            uint64_t ts_us = std::chrono::duration_cast<std::chrono::microseconds>(
-                                  now.time_since_epoch())
-                                  .count();
-            frame_buffer_->push_frame(parsed->payload, ts_us, true);
+        // Deliver copies to admin-started initiator sessions (handshake/acks)
+        {
+            std::lock_guard<std::mutex> lock(active_streams_mutex_);
+            for (auto& [stream_id, stream] : active_streams_) {
+                auto more = stream->on_packet(*parsed, now);
+                send_packets(more, stream->peer());
+            }
+        }
+
+        // Capture complete Annex B NALs (flush when a new start code begins)
+        if (parsed->header.packet_type == PacketType::Data && !parsed->payload.empty()) {
+            const uint64_t ts_us = parsed->header.timestamp_us != 0
+                                       ? parsed->header.timestamp_us
+                                       : static_cast<uint64_t>(
+                                             std::chrono::duration_cast<std::chrono::microseconds>(
+                                                 now.time_since_epoch())
+                                                 .count());
+
+            if (starts_with_annex_b(parsed->payload) && !frame_accumulator_.empty()) {
+                frame_buffer_->push_frame(frame_accumulator_, last_frame_timestamp_us_,
+                                          last_frame_type_ == FrameType::Keyframe);
+                frame_accumulator_.clear();
+            }
+
+            last_frame_type_ = parsed->header.frame_type;
+            last_frame_timestamp_us_ = ts_us;
+            frame_accumulator_.insert(frame_accumulator_.end(), parsed->payload.begin(),
+                                      parsed->payload.end());
+
+            // Classify keyframe from NAL header when present on this chunk
+            if (starts_with_annex_b(parsed->payload)) {
+                const size_t hdr = annex_b_header_len(parsed->payload);
+                if (hdr < parsed->payload.size()) {
+                    last_frame_type_ = classify_nal_header(parsed->payload[hdr]);
+                }
+            }
         }
 
         if (rx_callback_) {
@@ -189,6 +268,9 @@ void Transport::run() {
     if (session_ && mode_ == Mode::Send) {
         send_packets(session_->start(), session_->peer());
     }
+
+    // Start any admin-created streams already queued before run()
+    start_pending_streams();
 
     epoll_event events[8];
     while (running_) {
@@ -208,12 +290,32 @@ void Transport::run() {
                 if (::read(wakeup_fd_, &val, sizeof(val)) < 0 && errno != EAGAIN) {
                     break;
                 }
+                start_pending_streams();
             } else if (events[i].data.fd == sock_) {
                 on_readable();
             }
         }
+        // Also drain pending starts on timeout ticks (eventfd may coalesce)
+        start_pending_streams();
+
         if (session_) {
             send_packets(session_->on_tick(std::chrono::steady_clock::now()), session_->peer());
+        }
+
+        // Tick all active streams
+        {
+            std::lock_guard<std::mutex> lock(active_streams_mutex_);
+            std::vector<std::string> to_remove;
+            const auto now = std::chrono::steady_clock::now();
+            for (auto& [stream_id, stream] : active_streams_) {
+                send_packets(stream->on_tick(now), stream->peer());
+                if (stream->is_complete() || stream->failed()) {
+                    to_remove.push_back(stream_id);
+                }
+            }
+            for (const auto& stream_id : to_remove) {
+                active_streams_.erase(stream_id);
+            }
         }
     }
     running_ = false;
@@ -240,15 +342,46 @@ bool Transport::start_admin_server(uint16_t admin_port) {
     admin_server_->set_get_stats_callback([this](const std::string& id, StreamStats& stats) {
         return this->on_get_stream_stats(id, stats);
     });
+    admin_server_->set_get_frames_callback([this]() {
+        return this->on_get_frames();
+    });
     return admin_server_->start();
 }
 
+void Transport::wakeup_loop() {
+    if (wakeup_fd_ < 0) {
+        return;
+    }
+    uint64_t one = 1;
+    if (::write(wakeup_fd_, &one, sizeof(one)) < 0) {
+        // best-effort
+    }
+}
+
+void Transport::start_pending_streams() {
+    std::vector<std::pair<Session*, sockaddr_in>> to_start;
+    {
+        std::lock_guard<std::mutex> lock(active_streams_mutex_);
+        if (pending_stream_starts_.empty()) {
+            return;
+        }
+        for (const auto& stream_id : pending_stream_starts_) {
+            auto it = active_streams_.find(stream_id);
+            if (it != active_streams_.end()) {
+                to_start.emplace_back(it->second.get(), it->second->peer());
+            }
+        }
+        pending_stream_starts_.clear();
+    }
+    for (auto& [session, peer] : to_start) {
+        send_packets(session->start(), peer);
+    }
+}
+
 std::string Transport::on_start_stream(const StreamRequest& req) {
-    // Generate stream ID
     static uint32_t stream_counter = 0;
     std::string stream_id = "stream_" + std::to_string(++stream_counter);
 
-    // Create a new session for this stream
     try {
         auto stream_session = std::make_unique<Session>(Session::Role::Initiator,
                                                          make_addr(req.host, req.port));
@@ -258,7 +391,12 @@ std::string Transport::on_start_stream(const StreamRequest& req) {
         }
         stream_session->set_media_send(std::move(source));
 
-        active_streams_[stream_id] = std::move(stream_session);
+        {
+            std::lock_guard<std::mutex> lock(active_streams_mutex_);
+            active_streams_[stream_id] = std::move(stream_session);
+            pending_stream_starts_.push_back(stream_id);
+        }
+        wakeup_loop();
         return stream_id;
     } catch (...) {
         return "";
@@ -266,6 +404,7 @@ std::string Transport::on_start_stream(const StreamRequest& req) {
 }
 
 bool Transport::on_stop_stream(const std::string& stream_id) {
+    std::lock_guard<std::mutex> lock(active_streams_mutex_);
     auto it = active_streams_.find(stream_id);
     if (it == active_streams_.end()) {
         return false;
@@ -275,6 +414,7 @@ bool Transport::on_stop_stream(const std::string& stream_id) {
 }
 
 bool Transport::on_get_stream_stats(const std::string& stream_id, StreamStats& stats) {
+    std::lock_guard<std::mutex> lock(active_streams_mutex_);
     auto it = active_streams_.find(stream_id);
     if (it == active_streams_.end()) {
         return false;
@@ -287,6 +427,23 @@ bool Transport::on_get_stream_stats(const std::string& stream_id, StreamStats& s
     stats.bytes_received = session_stats.media_bytes_received;
     stats.data_sent = session_stats.data_sent;
     return true;
+}
+
+std::string Transport::on_get_frames() {
+    auto frames = frame_buffer_->get_all_frames();
+    std::ostringstream oss;
+    oss << R"({"frames":[)";
+    bool first = true;
+    for (const auto& frame : frames) {
+        if (!first) oss << ",";
+        first = false;
+        std::string b64 = base64_encode(frame->data);
+        oss << R"({"timestamp_us":)" << frame->timestamp_us
+            << R"(,"is_keyframe":)" << (frame->is_keyframe ? "true" : "false")
+            << R"(,"data_base64":")" << b64 << R"("})";
+    }
+    oss << R"(]})";
+    return oss.str();
 }
 
 }  // namespace socketcast

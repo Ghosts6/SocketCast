@@ -17,7 +17,8 @@ jobs:
       - name: Build
         run: cmake --build engine/build
       - name: Test
-        run: ctest --test-dir engine/build --output-on-failure
+        run: timeout 120 ctest --test-dir engine/build --output-on-failure
+        timeout-minutes: 3
 
   control-plane:
     runs-on: ubuntu-latest
