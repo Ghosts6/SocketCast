@@ -39,6 +39,7 @@ def fake_redis():
     mock.get = AsyncMock(side_effect=mock_get)
     mock.delete = AsyncMock(side_effect=mock_delete)
     mock.keys = AsyncMock(side_effect=mock_keys)
+    mock.ping = AsyncMock(return_value=True)
     mock._storage = storage
     return mock
 
@@ -51,6 +52,7 @@ def client(fake_redis):
         patch("app.api.sessions.redis_client", fake_redis),
         patch("app.api.metrics.redis_client", fake_redis),
         patch("app.bridge.websocket_bridge.redis_client", fake_redis),
+        patch("app.main.redis_client", fake_redis),
     ]
     for p in patches:
         p.start()

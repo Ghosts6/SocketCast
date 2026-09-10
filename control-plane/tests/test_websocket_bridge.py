@@ -29,12 +29,20 @@ def test_metrics_ws_streams_payload(client, created_session):
         },
     )
 
-    with client.websocket_connect(f"/ws/metrics/{sid}") as ws:
-        message = ws.receive_json()
-        assert message["type"] == "metrics"
-        assert "data" in message
-        assert message["data"]["bitrate_mbps"] == 1.25
-        assert message["data"]["session_id"] == sid
+    # Engine unreachable in this test — posted Redis metrics must pass through
+    # untouched rather than depend on whatever happens to listen on port 5001.
+    mock_client = MagicMock()
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=None)
+    mock_client.get = AsyncMock(side_effect=ConnectionError("engine unreachable"))
+
+    with patch("app.bridge.websocket_bridge.httpx.AsyncClient", return_value=mock_client):
+        with client.websocket_connect(f"/ws/metrics/{sid}") as ws:
+            message = ws.receive_json()
+    assert message["type"] == "metrics"
+    assert "data" in message
+    assert message["data"]["bitrate_mbps"] == 1.25
+    assert message["data"]["session_id"] == sid
 
 
 def test_stream_ws_ready_ping_and_binary(client, created_session):
@@ -64,7 +72,8 @@ def test_stream_ws_ready_ping_and_binary(client, created_session):
             assert msg["type"] == "frame"
             assert msg["status"] == "ready"
             assert msg["session_id"] == sid
-            assert "binary" in msg["note"].lower() or "h.264" in msg["note"].lower()
+            assert msg["codec"] == "h264"
+            assert msg["format"] == "annex-b"
 
             ws.send_text("ping")
             # May receive binary and/or pong; drain until pong

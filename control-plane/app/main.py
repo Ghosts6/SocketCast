@@ -4,6 +4,7 @@ import logging
 import sys
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from prometheus_client import generate_latest, CONTENT_TYPE_LATEST
 from starlette.responses import Response
 
@@ -69,7 +70,7 @@ async def healthz():
         return {"status": "ok", "redis": "connected", "version": "1.0.0"}
     except Exception as e:
         logger.error(f"Health check failed: {e}")
-        return {"status": "degraded", "error": str(e)}, 503
+        return JSONResponse(status_code=503, content={"status": "degraded", "error": str(e)})
 
 @app.get("/metrics", response_class=Response)
 async def prometheus_metrics():
