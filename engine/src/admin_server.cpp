@@ -37,9 +37,7 @@ bool AdminServer::start() {
     sockaddr_in addr{};
     addr.sin_family = AF_INET;
     addr.sin_port = htons(port_);
-    if (inet_pton(AF_INET, "127.0.0.1", &addr.sin_addr) != 1) {
-        addr.sin_addr.s_addr = INADDR_LOOPBACK;
-    }
+    addr.sin_addr.s_addr = INADDR_ANY;
 
     if (bind(listen_fd_, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) < 0) {
         std::cerr << "AdminServer: bind failed on port " << port_ << "\n";
@@ -57,7 +55,7 @@ bool AdminServer::start() {
 
     running_ = true;
     server_thread_ = std::make_unique<std::thread>(&AdminServer::run_server, this);
-    std::cout << "AdminServer listening on 127.0.0.1:" << port_ << "\n";
+    std::cout << "AdminServer listening on 0.0.0.0:" << port_ << "\n";
     return true;
 }
 
@@ -275,11 +273,16 @@ std::string AdminServer::handle_request(const std::string& method, const std::st
     }
 
     // DELETE /admin/streams/{id}
-    if (method == "DELETE" && path.substr(0, 16) == "/admin/streams/") {
+    // Prefix is 15 chars: "/admin/streams/" — do not use 16 (never matches).
+    if (method == "DELETE" && path.rfind("/admin/streams/", 0) == 0 &&
+        path.find("/stats") == std::string::npos) {
         if (!stop_stream_cb_) {
             return http_response(500, json_error("no stop stream callback"));
         }
-        std::string stream_id = path.substr(16);
+        std::string stream_id = path.substr(15);  // after "/admin/streams/"
+        if (stream_id.empty() || stream_id.find('/') != std::string::npos) {
+            return http_response(400, json_error("invalid stream id"));
+        }
         bool ok = stop_stream_cb_(stream_id);
         if (!ok) {
             return http_response(404, json_error("stream not found"));
@@ -319,6 +322,14 @@ std::string AdminServer::handle_request(const std::string& method, const std::st
         }
         std::string frames_json = get_frames_cb_();
         return http_response(200, frames_json);
+    }
+
+    // GET /admin/stats — aggregate listener + active admin stream stats
+    if (method == "GET" && path == "/admin/stats") {
+        if (!get_aggregate_stats_cb_) {
+            return http_response(500, json_error("no aggregate stats callback"));
+        }
+        return http_response(200, get_aggregate_stats_cb_());
     }
 
     return http_response(404, json_error("not found"));

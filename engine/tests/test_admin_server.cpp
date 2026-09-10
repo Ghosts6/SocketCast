@@ -100,6 +100,19 @@ int main() {
         require(last_port == 6000, "compact port");
     }
 
+    // DELETE must accept /admin/streams/{id} (regression: prefix length 16 never matched)
+    {
+        bool stopped = false;
+        admin.set_stop_stream_callback([&](const std::string& id) {
+            stopped = (id == "stream_test");
+            return stopped;
+        });
+        const auto resp =
+            http_exchange(18081, "DELETE /admin/streams/stream_test HTTP/1.1\r\nHost: x\r\n\r\n");
+        require(resp.find("200") != std::string::npos, "delete 200");
+        require(stopped, "delete callback got id");
+    }
+
     admin.stop();
     std::cout << "test_admin_server ok\n";
     return 0;

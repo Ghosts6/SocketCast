@@ -56,9 +56,13 @@ private:
     bool on_stop_stream(const std::string& stream_id);
     bool on_get_stream_stats(const std::string& stream_id, StreamStats& stats);
     std::string on_get_frames();
+    std::string on_get_aggregate_stats();
 
     void wakeup_loop();
     void start_pending_streams();
+    void cache_parameter_set(const std::vector<uint8_t>& annex_b);
+    void push_captured_frame(const std::vector<uint8_t>& frame_data, uint64_t ts_us,
+                             bool is_keyframe);
 
     std::string bind_address_;
     uint16_t port_{0};
@@ -75,6 +79,9 @@ private:
     std::map<std::string, std::unique_ptr<Session>> active_streams_;
     std::vector<std::string> pending_stream_starts_;
     std::unique_ptr<FrameBuffer> frame_buffer_;
+    std::mutex param_sets_mutex_;
+    std::vector<uint8_t> cached_sps_;
+    std::vector<uint8_t> cached_pps_;
 
     // Frame accumulation: flush when a new Annex B start code begins a NAL
     std::vector<uint8_t> frame_accumulator_;

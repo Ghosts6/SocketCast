@@ -66,18 +66,6 @@ void set_nonblock(int fd) {
     }
 }
 
-bool starts_with_annex_b(const std::vector<uint8_t>& payload) {
-    if (payload.size() >= 4 && payload[0] == 0x00 && payload[1] == 0x00 &&
-        payload[2] == 0x00 && payload[3] == 0x01) {
-        return true;
-    }
-    if (payload.size() >= 3 && payload[0] == 0x00 && payload[1] == 0x00 &&
-        payload[2] == 0x01) {
-        return true;
-    }
-    return false;
-}
-
 size_t annex_b_header_len(const std::vector<uint8_t>& payload) {
     if (payload.size() >= 4 && payload[0] == 0x00 && payload[1] == 0x00 &&
         payload[2] == 0x00 && payload[3] == 0x01) {
@@ -219,10 +207,30 @@ void Transport::on_readable() {
         auto replies = session_->on_packet(*parsed, now);
         send_packets(replies, session_->peer());
 
-        // Deliver copies to admin-started initiator sessions (handshake/acks)
+        // Deliver to admin initiator sessions with demux:
+        // - SYN-ACK only to Handshaking sessions (don't let a finished stream steal it)
+        // - ACK/NACK/Handshake only when stream_id matches
+        // - Never deliver Data to initiators (same-socket loopback would echo our own
+        //   media and corrupt initiator receive state / handshake).
         {
             std::lock_guard<std::mutex> lock(active_streams_mutex_);
             for (auto& [stream_id, stream] : active_streams_) {
+                const auto st = stream->state();
+                const uint32_t sid = stream->stream_id();
+                const auto ptype = parsed->header.packet_type;
+                const uint8_t flags = parsed->header.flags;
+
+                bool deliver = false;
+                if (ptype == PacketType::Handshake && (flags & kFlagSyn) && (flags & kFlagAck) &&
+                    !(flags & kFlagFin)) {
+                    deliver = (st == SessionState::Handshaking);
+                } else if (sid != 0 && parsed->header.stream_id == sid) {
+                    deliver = (ptype == PacketType::Ack || ptype == PacketType::Nack ||
+                               ptype == PacketType::Handshake);
+                }
+                if (!deliver) {
+                    continue;
+                }
                 auto more = stream->on_packet(*parsed, now);
                 send_packets(more, stream->peer());
             }
@@ -345,6 +353,9 @@ bool Transport::start_admin_server(uint16_t admin_port) {
     admin_server_->set_get_frames_callback([this]() {
         return this->on_get_frames();
     });
+    admin_server_->set_get_aggregate_stats_callback([this]() {
+        return this->on_get_aggregate_stats();
+    });
     return admin_server_->start();
 }
 
@@ -359,22 +370,29 @@ void Transport::wakeup_loop() {
 }
 
 void Transport::start_pending_streams() {
-    std::vector<std::pair<Session*, sockaddr_in>> to_start;
+    // Collect IDs under the lock, then re-lookup when calling start() so a
+    // concurrent on_start_stream clear() cannot leave us with a dangling Session*.
+    std::vector<std::string> ids;
     {
         std::lock_guard<std::mutex> lock(active_streams_mutex_);
         if (pending_stream_starts_.empty()) {
             return;
         }
-        for (const auto& stream_id : pending_stream_starts_) {
-            auto it = active_streams_.find(stream_id);
-            if (it != active_streams_.end()) {
-                to_start.emplace_back(it->second.get(), it->second->peer());
-            }
-        }
-        pending_stream_starts_.clear();
+        ids.swap(pending_stream_starts_);
     }
-    for (auto& [session, peer] : to_start) {
-        send_packets(session->start(), peer);
+    for (const auto& stream_id : ids) {
+        std::vector<Packet> packets;
+        sockaddr_in peer{};
+        {
+            std::lock_guard<std::mutex> lock(active_streams_mutex_);
+            auto it = active_streams_.find(stream_id);
+            if (it == active_streams_.end()) {
+                continue;
+            }
+            peer = it->second->peer();
+            packets = it->second->start();
+        }
+        send_packets(packets, peer);
     }
 }
 
@@ -389,12 +407,32 @@ std::string Transport::on_start_stream(const StreamRequest& req) {
         if (!source->open()) {
             return "";
         }
+
+        // Set up frame capture callback so frames are buffered for dashboard
+        stream_session->set_frame_capture_callback(
+            [this](const std::vector<uint8_t>& frame_data, uint64_t ts_us, bool is_keyframe) {
+                this->push_captured_frame(frame_data, ts_us, is_keyframe);
+            });
+
         stream_session->set_media_send(std::move(source));
 
         {
             std::lock_guard<std::mutex> lock(active_streams_mutex_);
+            // Dashboard/demo: only one admin stream at a time. Drop finished and
+            // any still-running peers so a new start always handshakes cleanly.
+            active_streams_.clear();
+            pending_stream_starts_.clear();
             active_streams_[stream_id] = std::move(stream_session);
             pending_stream_starts_.push_back(stream_id);
+        }
+        {
+            std::lock_guard<std::mutex> lock(param_sets_mutex_);
+            cached_sps_.clear();
+            cached_pps_.clear();
+        }
+        frame_accumulator_.clear();
+        if (frame_buffer_) {
+            (void)frame_buffer_->get_all_frames();  // drop stale NALs from prior stream
         }
         wakeup_loop();
         return stream_id;
@@ -434,8 +472,32 @@ std::string Transport::on_get_frames() {
     std::ostringstream oss;
     oss << R"({"frames":[)";
     bool first = true;
+
+    // Always prepend cached SPS/PPS so a late-joining browser can configure
+    // WebCodecs even if it connects mid-GOP.
+    {
+        std::lock_guard<std::mutex> lock(param_sets_mutex_);
+        auto emit = [&](const std::vector<uint8_t>& nal, bool key) {
+            if (nal.empty()) {
+                return;
+            }
+            if (!first) {
+                oss << ",";
+            }
+            first = false;
+            oss << R"({"timestamp_us":0,"is_keyframe":)" << (key ? "true" : "false")
+                << R"(,"data_base64":")" << base64_encode(nal) << R"("})";
+        };
+        if (!frames.empty()) {
+            emit(cached_sps_, false);
+            emit(cached_pps_, false);
+        }
+    }
+
     for (const auto& frame : frames) {
-        if (!first) oss << ",";
+        if (!first) {
+            oss << ",";
+        }
         first = false;
         std::string b64 = base64_encode(frame->data);
         oss << R"({"timestamp_us":)" << frame->timestamp_us
@@ -443,6 +505,99 @@ std::string Transport::on_get_frames() {
             << R"(,"data_base64":")" << b64 << R"("})";
     }
     oss << R"(]})";
+    return oss.str();
+}
+
+void Transport::cache_parameter_set(const std::vector<uint8_t>& annex_b) {
+    size_t off = 0;
+    if (annex_b.size() >= 4 && annex_b[0] == 0 && annex_b[1] == 0 && annex_b[2] == 0 &&
+        annex_b[3] == 1) {
+        off = 4;
+    } else if (annex_b.size() >= 3 && annex_b[0] == 0 && annex_b[1] == 0 && annex_b[2] == 1) {
+        off = 3;
+    }
+    if (off >= annex_b.size()) {
+        return;
+    }
+    const uint8_t nal_type = annex_b[off] & 0x1f;
+    std::lock_guard<std::mutex> lock(param_sets_mutex_);
+    if (nal_type == 7) {
+        cached_sps_ = annex_b;
+    } else if (nal_type == 8) {
+        cached_pps_ = annex_b;
+    }
+}
+
+void Transport::push_captured_frame(const std::vector<uint8_t>& frame_data, uint64_t ts_us,
+                                    bool is_keyframe) {
+    cache_parameter_set(frame_data);
+    frame_buffer_->push_frame(frame_data, ts_us, is_keyframe);
+}
+
+std::string Transport::on_get_aggregate_stats() {
+    std::ostringstream oss;
+    oss << R"({"active_streams":[)";
+    bool first = true;
+    uint64_t data_sent = 0;
+    uint64_t data_received = 0;
+    uint64_t frames = 0;
+    double rtt = 0.0;
+    double jitter = 0.0;
+    {
+        std::lock_guard<std::mutex> lock(active_streams_mutex_);
+        for (const auto& [id, stream] : active_streams_) {
+            const auto& st = stream->stats();
+            if (!first) {
+                oss << ",";
+            }
+            first = false;
+            oss << R"({"id":")" << id << R"(","data_sent":)" << st.data_sent
+                << R"(,"packets_received":)" << st.data_received << R"(,"frames_received":)"
+                << st.frames_received << R"(,"rtt_ms":)" << st.rtt_ms << R"(,"jitter_ms":)"
+                << st.jitter_ms << R"(,"bytes_received":)" << st.media_bytes_received
+                << R"(,"state":)" << static_cast<int>(stream->state()) << "}";
+            data_sent += st.data_sent;
+            frames += st.frames_received;
+            if (st.rtt_ms > 0) {
+                rtt = st.rtt_ms;
+            }
+            if (st.jitter_ms > 0) {
+                jitter = st.jitter_ms;
+            }
+        }
+    }
+    if (session_) {
+        const auto& st = session_->stats();
+        data_received = st.data_received;
+        if (frames == 0) {
+            frames = st.frames_received;
+        }
+        if (rtt == 0.0) {
+            rtt = st.rtt_ms;
+        }
+        if (jitter == 0.0) {
+            jitter = st.jitter_ms;
+        }
+    }
+    // Rough bitrate from recent send/receive counters (bytes approx via media or packets*avg)
+    const double bitrate_mbps =
+        0.0;  // filled by control-plane from deltas; expose counters here
+    oss << R"(],"data_sent":)" << data_sent << R"(,"packets_received":)" << data_sent
+        << R"(,"frames_received":)" << frames << R"(,"rtt_ms":)" << rtt << R"(,"jitter_ms":)"
+        << jitter << R"(,"bitrate_mbps":)" << bitrate_mbps << R"(,"bytes_received":)"
+        << ([&]() -> uint64_t {
+               uint64_t bytes = 0;
+               std::lock_guard<std::mutex> lock(active_streams_mutex_);
+               for (const auto& [id, stream] : active_streams_) {
+                   (void)id;
+                   bytes += stream->stats().media_bytes_received;
+               }
+               if (bytes == 0 && session_) {
+                   bytes = session_->stats().media_bytes_received;
+               }
+               return bytes;
+           })()
+        << "}";
     return oss.str();
 }
 

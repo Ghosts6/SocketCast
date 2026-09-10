@@ -1,5 +1,7 @@
 #include "socketcast/session.hpp"
 
+#include "socketcast/nal_parser.hpp"
+
 #include <algorithm>
 
 namespace socketcast {
@@ -180,13 +182,44 @@ std::vector<Packet> Session::fill_window(std::chrono::steady_clock::time_point n
                 stream_start_us_ = steady_us(now);
                 stream_start_set_ = true;
             }
+
+            // Flush on every NAL boundary so each buffered frame is exactly one
+            // NAL unit (flushing only on keyframes used to glue a whole GOP's
+            // NALs into one blob, corrupting the dashboard decoder's SPS parse).
+            if (starts_with_annex_b(chunk.payload) && !pending_frame_.empty()) {
+                if (frame_capture_cb_) {
+                    frame_capture_cb_(pending_frame_, last_frame_timestamp_us_,
+                                      pending_frame_is_keyframe_);
+                }
+                pending_frame_.clear();
+            }
+            if (starts_with_annex_b(chunk.payload)) {
+                pending_frame_is_keyframe_ = (chunk.frame_type == FrameType::Keyframe);
+                if (chunk.frame_type == FrameType::Keyframe ||
+                    chunk.frame_type == FrameType::PFrame) {
+                    ++stats_.frames_received;  // frames *sent* (dashboard counter)
+                }
+            }
+            pending_frame_.insert(pending_frame_.end(), chunk.payload.begin(), chunk.payload.end());
+            last_frame_timestamp_us_ = chunk.pts_us;
+
             InFlight slot;
             slot.packet = pkt;
             slot.last_sent = now;
             slot.retries = 0;
             in_flight_.emplace(seq, slot);
             ++stats_.data_sent;
+            stats_.media_bytes_received += chunk.payload.size();  // bytes sent (reuse field for admin)
             out.push_back(std::move(pkt));
+        }
+        // Flush the final NAL once the source is exhausted — it would
+        // otherwise never see a following start code to trigger a flush.
+        if (media_source_->eof() && !pending_frame_.empty()) {
+            if (frame_capture_cb_) {
+                frame_capture_cb_(pending_frame_, last_frame_timestamp_us_,
+                                  pending_frame_is_keyframe_);
+            }
+            pending_frame_.clear();
         }
         return out;
     }
@@ -247,9 +280,18 @@ std::vector<Packet> Session::on_packet(const Packet& pkt,
     if (type == PacketType::Handshake) {
         const uint8_t f = pkt.header.flags;
         if (role_ == Role::Listener && (f & kFlagSyn) && !(f & kFlagAck) && !(f & kFlagFin)) {
+            // New initiator (including restarts): reset receive state so seq starts cleanly.
+            failed_ = false;
+            fin_sent_ = false;
+            fin_received_ = false;
+            next_expected_ = 0;
+            next_seq_ = 0;
+            in_flight_.clear();
+            reorder_.clear();
+            handshake_retries_ = 0;
+            state_ = SessionState::Handshaking;
             stream_id_ = kListenerStreamId;
             last_handshake_sent_ = now;
-            handshake_retries_ = 0;
             out.push_back(make_handshake(kFlagSyn | kFlagAck));
             return out;
         }

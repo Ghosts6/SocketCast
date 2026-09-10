@@ -4,6 +4,7 @@ from datetime import datetime, UTC
 from fastapi import APIRouter, HTTPException
 
 from app.core.redis_client import redis_client
+from app.core import metrics as prometheus_metrics
 
 router = APIRouter()
 
@@ -47,7 +48,7 @@ async def get_session_metrics(session_id: str):
 
 
 @router.post("/{session_id}")
-async def update_session_metrics(session_id: str, metrics: dict):
+async def update_session_metrics(session_id: str, metrics_data: dict):
     """Update metrics for a session (called by WebSocket bridge or engine)."""
     try:
         # Check session exists
@@ -58,9 +59,13 @@ async def update_session_metrics(session_id: str, metrics: dict):
 
         # Store metrics with 10min TTL (live metric expiry)
         metrics_key = f"metrics:{session_id}"
-        await redis_client.setex(metrics_key, 600, json.dumps(metrics))
+        await redis_client.setex(metrics_key, 600, json.dumps(metrics_data))
+
+        prometheus_metrics.metrics_received.inc()
+
         return {"status": "updated", "session_id": session_id}
     except HTTPException:
         raise
     except Exception as e:
+        prometheus_metrics.errors_total.labels(type="metrics_update").inc()
         raise HTTPException(status_code=500, detail=f"Redis error: {str(e)}")

@@ -84,4 +84,15 @@ std::vector<std::vector<uint8_t>> chunk_payload(const uint8_t* data, size_t len)
     return chunks;
 }
 
+bool starts_with_annex_b(const std::vector<uint8_t>& payload) {
+    if (payload.size() >= 4 && payload[0] == 0 && payload[1] == 0 && payload[2] == 0 &&
+        payload[3] == 1) {
+        return true;
+    }
+    if (payload.size() >= 3 && payload[0] == 0 && payload[1] == 0 && payload[2] == 1) {
+        return true;
+    }
+    return false;
+}
+
 }  // namespace socketcast

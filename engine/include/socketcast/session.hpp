@@ -11,6 +11,7 @@
 
 #include <chrono>
 #include <cstdint>
+#include <functional>
 #include <map>
 #include <memory>
 #include <netinet/in.h>
@@ -57,6 +58,10 @@ public:
     void set_dummy_send(uint32_t count, uint16_t payload_size);
     void set_media_send(std::unique_ptr<MediaSource> source);
     void set_media_receive(std::unique_ptr<MediaSink> sink);
+
+    // Set callback for capturing sent frames (for dashboard streaming)
+    using FrameCaptureCallback = std::function<void(const std::vector<uint8_t>&, uint64_t, bool)>;
+    void set_frame_capture_callback(FrameCaptureCallback cb) { frame_capture_cb_ = cb; }
 
     std::vector<Packet> start();
     std::vector<Packet> on_packet(const Packet& pkt,
@@ -109,6 +114,10 @@ private:
     std::map<uint32_t, Packet> reorder_;
     std::unique_ptr<MediaSource> media_source_;
     std::unique_ptr<MediaSink> media_sink_;
+    FrameCaptureCallback frame_capture_cb_;
+    std::vector<uint8_t> pending_frame_;
+    bool pending_frame_is_keyframe_{false};
+    uint64_t last_frame_timestamp_us_{0};
     RtoEstimator rto_;
     RateController rate_controller_{1'000'000};
     JitterBuffer jitter_buffer_{50};

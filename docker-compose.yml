@@ -1,39 +1,163 @@
+version: "3.9"
+
 services:
   redis:
     image: redis:7-alpine
+    container_name: socketcast-redis
     ports:
       - "6379:6379"
+    volumes:
+      - redis-data:/data
+    command: redis-server --appendonly yes --loglevel notice
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
 
   engine:
     build:
       context: ./engine
+      dockerfile: Dockerfile
+    container_name: socketcast-engine
+    environment:
+      - LOG_LEVEL=info
     ports:
       - "5000:5000/udp"
-      - "9100:9100"   # metrics (Phase 8)
-    # TODO(Phase 5): expose engine's control channel here once it exists,
-    # and point control-plane's ENGINE_HOST/ENGINE_CONTROL_PORT at it.
+      - "5001:5001/tcp"
+      - "9100:9100"
+    volumes:
+      - ./Doc/dev:/media:ro
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5001/admin/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
 
   control-plane:
     build:
       context: ./control-plane
-    env_file:
-      - ./control-plane/.env.example
+      dockerfile: Dockerfile
+    container_name: socketcast-control-plane
     environment:
       - REDIS_URL=redis://redis:6379/0
       - ENGINE_HOST=engine
+      - ENGINE_CONTROL_PORT=5001
+      - LOG_LEVEL=info
     ports:
       - "8000:8000"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
     depends_on:
-      - redis
-      - engine
+      redis:
+        condition: service_healthy
+      engine:
+        condition: service_healthy
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
 
   dashboard:
     build:
       context: ./dashboard
+      dockerfile: Dockerfile
+    container_name: socketcast-dashboard
     ports:
       - "5173:80"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:80/"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
     depends_on:
-      - control-plane
+      control-plane:
+        condition: service_healthy
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
 
-# TODO: add a docker-compose.override.yml (gitignored) for local-only
-# tweaks (bind mounts for hot reload, exposed debug ports, etc.).
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: socketcast-prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - prometheus-data:/prometheus
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:9090/-/healthy"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+    depends_on:
+      control-plane:
+        condition: service_healthy
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: socketcast-grafana
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_INSTALL_PLUGINS=
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:3000/api/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+    depends_on:
+      prometheus:
+        condition: service_healthy
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  redis-data:
+  prometheus-data:
+  grafana-data:

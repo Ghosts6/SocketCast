@@ -63,11 +63,7 @@ function codecFromSps(sps: Uint8Array): string {
   return `avc1.${profile}${compat}${level}`;
 }
 
-function drawStatus(
-  canvas: HTMLCanvasElement,
-  text: string,
-  bytes?: number,
-) {
+function drawStatus(canvas: HTMLCanvasElement, text: string, bytes?: number) {
   const ctx = canvas.getContext("2d");
   if (!ctx) return;
   ctx.fillStyle = "#111";
@@ -101,12 +97,27 @@ export function useStream(
     let configured = false;
     let sps: Uint8Array | null = null;
     let pps: Uint8Array | null = null;
+    let needKey = true;
     let timestampUs = 0;
     let cancelled = false;
     let pingTimer: number | undefined;
+    let statusTimer: number | undefined;
+
+    const closeDecoder = () => {
+      try {
+        decoder?.close();
+      } catch {
+        /* ignore */
+      }
+      decoder = null;
+      configured = false;
+      needKey = true;
+    };
 
     const ensureDecoder = () => {
-      if (configured || !sps || !pps || typeof VideoDecoder === "undefined") return;
+      if (!sps || !pps || typeof VideoDecoder === "undefined") return;
+      if (configured && decoder && decoder.state === "configured") return;
+      closeDecoder();
       try {
         decoder = new VideoDecoder({
           output: (frame) => {
@@ -124,17 +135,22 @@ export function useStream(
           error: (err) => {
             console.error("VideoDecoder error:", err);
             drawStatus(canvas, "Decoder error — receiving bytes", bytesRef.current);
+            closeDecoder();
           },
         });
+        const codec = codecFromSps(sps);
         decoder.configure({
-          codec: codecFromSps(sps),
+          codec,
           description: buildAvcC(sps, pps),
           optimizeForLatency: true,
+          hardwareAcceleration: "prefer-software",
         });
         configured = true;
+        needKey = true;
+        drawStatus(canvas, "Decoder ready — waiting for keyframe", bytesRef.current);
       } catch (err) {
         console.error("Failed to configure VideoDecoder:", err);
-        decoder = null;
+        closeDecoder();
       }
     };
 
@@ -147,13 +163,20 @@ export function useStream(
       websocket.onopen = () => {
         drawStatus(canvas, "Waiting for H.264…");
         pingTimer = window.setInterval(() => {
-          if (websocket?.readyState === WebSocket.OPEN) {
-            websocket.send("ping");
-          }
+          if (websocket?.readyState === WebSocket.OPEN) websocket.send("ping");
         }, 5000);
+        statusTimer = window.setInterval(() => {
+          if (!configured || frameCountRef.current === 0) {
+            drawStatus(
+              canvas,
+              configured ? "Waiting for keyframe…" : "Receiving H.264…",
+              bytesRef.current,
+            );
+          }
+        }, 500);
       };
 
-      websocket.onmessage = async (event) => {
+      websocket.onmessage = (event) => {
         if (typeof event.data === "string") {
           try {
             const msg = JSON.parse(event.data);
@@ -173,31 +196,27 @@ export function useStream(
 
         const nal = stripStartCode(data);
         if (type === 7) {
-          sps = nal;
-          configured = false;
+          sps = nal.slice();
           ensureDecoder();
           return;
         }
         if (type === 8) {
-          pps = nal;
+          pps = nal.slice();
           ensureDecoder();
           return;
         }
 
-        // Non-VCL parameter sets already handled; SEI etc. ignored
-        if (type !== 1 && type !== 5) {
-          if (!configured) {
-            drawStatus(canvas, "Receiving H.264…", bytesRef.current);
-          }
+        // Ignore non-VCL (SEI, AUD, etc.)
+        if (type !== 1 && type !== 5) return;
+
+        if (!configured || !decoder || decoder.state !== "configured") {
           return;
         }
 
-        ensureDecoder();
-        if (!decoder || decoder.state !== "configured") {
-          drawStatus(canvas, "Receiving H.264 (no decoder)…", bytesRef.current);
-          frameCountRef.current += 1;
+        if (needKey && type !== 5) {
           return;
         }
+        if (type === 5) needKey = false;
 
         timestampUs += 33_333;
         try {
@@ -224,12 +243,9 @@ export function useStream(
     return () => {
       cancelled = true;
       if (pingTimer != null) window.clearInterval(pingTimer);
+      if (statusTimer != null) window.clearInterval(statusTimer);
       websocket?.close();
-      try {
-        decoder?.close();
-      } catch {
-        /* ignore */
-      }
+      closeDecoder();
     };
   }, [connected, sessionId, canvasRef]);
 

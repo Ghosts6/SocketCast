@@ -6,12 +6,53 @@ interface StreamCanvasProps {
   sessionId?: string;
 }
 
+function MaximizeIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="w-4 h-4">
+      <path d="M8 3H5a2 2 0 0 0-2 2v3" />
+      <path d="M21 8V5a2 2 0 0 0-2-2h-3" />
+      <path d="M3 16v3a2 2 0 0 0 2 2h3" />
+      <path d="M16 21h3a2 2 0 0 0 2-2v-3" />
+    </svg>
+  );
+}
+
+function MinimizeIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="w-4 h-4">
+      <path d="M8 3v3a2 2 0 0 1-2 2H3" />
+      <path d="M21 8h-3a2 2 0 0 1-2-2V3" />
+      <path d="M3 16h3a2 2 0 0 1 2 2v3" />
+      <path d="M16 21v-3a2 2 0 0 1 2-2h3" />
+    </svg>
+  );
+}
+
 export function StreamCanvas({ connected, sessionId }: StreamCanvasProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
   const [fps, setFps] = useState(0);
   const lastCountRef = useRef(0);
+  const [isFullscreen, setIsFullscreen] = useState(false);
 
   const { frameCount } = useStream(canvasRef, connected, sessionId);
+
+  useEffect(() => {
+    const handleFullscreenChange = () => {
+      setIsFullscreen(document.fullscreenElement === containerRef.current);
+    };
+    document.addEventListener("fullscreenchange", handleFullscreenChange);
+    return () => document.removeEventListener("fullscreenchange", handleFullscreenChange);
+  }, []);
+
+  const toggleFullscreen = () => {
+    if (!containerRef.current) return;
+    if (document.fullscreenElement) {
+      document.exitFullscreen().catch(() => {});
+    } else {
+      containerRef.current.requestFullscreen().catch(() => {});
+    }
+  };
 
   // FPS counter
   useEffect(() => {
@@ -44,7 +85,12 @@ export function StreamCanvas({ connected, sessionId }: StreamCanvasProps) {
   return (
     <div className="bg-white dark:bg-neutral-900 rounded-lg overflow-hidden shadow-lg border border-neutral-200 dark:border-neutral-800 hover:border-neutral-300 dark:hover:border-neutral-700 transition-colors">
       {/* Canvas */}
-      <div className="relative bg-black aspect-video flex items-center justify-center overflow-hidden group">
+      <div
+        ref={containerRef}
+        className={`relative bg-black flex items-center justify-center overflow-hidden group ${
+          isFullscreen ? "w-screen h-screen" : "aspect-video"
+        }`}
+      >
         <canvas
           ref={canvasRef}
           width={1280}
@@ -62,6 +108,19 @@ export function StreamCanvas({ connected, sessionId }: StreamCanvasProps) {
               <span className="text-xs font-semibold text-red-400 bg-black/50 px-2 py-1 rounded">LIVE</span>
             </>
           )}
+        </div>
+
+        {/* Fullscreen controls */}
+        <div className="absolute top-3 right-3 flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+          <button
+            type="button"
+            onClick={toggleFullscreen}
+            className="p-1.5 rounded bg-black/50 text-white hover:bg-black/70 transition-colors"
+            aria-label={isFullscreen ? "Exit fullscreen" : "Enter fullscreen"}
+            title={isFullscreen ? "Exit fullscreen" : "Enter fullscreen"}
+          >
+            {isFullscreen ? <MinimizeIcon /> : <MaximizeIcon />}
+          </button>
         </div>
       </div>
 

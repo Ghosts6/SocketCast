@@ -6,6 +6,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from app.core.config import settings
+from app.core import metrics as prometheus_metrics
 
 router = APIRouter()
 
@@ -29,7 +30,10 @@ class StreamResponse(BaseModel):
 async def start_stream(req: StreamRequest) -> StreamResponse:
     """Start a media stream on the engine."""
     try:
-        async with httpx.AsyncClient(timeout=5.0) as client:
+        # Engine transcodes non-raw inputs (e.g. .mp4) via ffmpeg synchronously
+        # before responding, which can exceed 5s — needs a longer budget than
+        # the other (near-instant) admin proxies below.
+        async with httpx.AsyncClient(timeout=60.0) as client:
             resp = await client.post(
                 f"{_engine_base()}/admin/streams",
                 json=req.model_dump(),
@@ -41,9 +45,17 @@ async def start_stream(req: StreamRequest) -> StreamResponse:
         body = resp.json()
         if "stream_id" not in body:
             raise HTTPException(status_code=500, detail="No stream_id in engine response")
+
+        prometheus_metrics.stream_created.inc()
+        prometheus_metrics.active_streams.inc()
+
         return StreamResponse(stream_id=body["stream_id"])
     except httpx.HTTPError as e:
+        prometheus_metrics.engine_connection_errors.inc()
         raise HTTPException(status_code=503, detail=f"Engine admin server unavailable: {e}") from e
+    except Exception as e:
+        prometheus_metrics.errors_total.labels(type="stream_creation").inc()
+        raise
 
 
 @router.delete("/streams/{stream_id}")
@@ -56,9 +68,16 @@ async def stop_stream(stream_id: str) -> dict[str, str]:
             raise HTTPException(status_code=404, detail="Stream not found")
         if resp.status_code >= 400:
             raise HTTPException(status_code=resp.status_code, detail=resp.text)
+
+        prometheus_metrics.active_streams.dec()
+
         return resp.json()
     except httpx.HTTPError as e:
+        prometheus_metrics.engine_connection_errors.inc()
         raise HTTPException(status_code=503, detail=f"Engine admin server unavailable: {e}") from e
+    except Exception as e:
+        prometheus_metrics.errors_total.labels(type="stream_deletion").inc()
+        raise
 
 
 @router.get("/streams/{stream_id}/stats")

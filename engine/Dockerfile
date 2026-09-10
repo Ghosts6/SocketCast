@@ -10,14 +10,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /src
 COPY . .
 
-RUN cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
+RUN rm -rf build \
+    && cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
     && cmake --build build --target socketcast_engine
 
 # ---- runtime ----
 FROM ubuntu:24.04 AS runtime
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    libstdc++6 \
+    libstdc++6 curl ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /src/build/socketcast_engine /usr/local/bin/socketcast_engine

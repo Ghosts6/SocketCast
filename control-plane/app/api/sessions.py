@@ -6,6 +6,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from app.core.redis_client import redis_client
+from app.core import metrics
 from app.models.session import Session
 
 router = APIRouter()
@@ -56,6 +57,9 @@ async def create_session(req: SessionCreateRequest):
             session.model_dump_json()
         )
 
+        metrics.session_created.inc()
+        metrics.active_sessions.inc()
+
         return {
             "status": "created",
             "session_id": session_id,
@@ -64,6 +68,7 @@ async def create_session(req: SessionCreateRequest):
             "port": req.port,
         }
     except Exception as e:
+        metrics.errors_total.labels(type="session_creation").inc()
         raise HTTPException(status_code=500, detail=f"Failed to create session: {str(e)}")
 
 
@@ -122,8 +127,11 @@ async def delete_session(session_id: str):
         # Clean up related metrics
         await redis_client.delete(f"metrics:{session_id}")
 
+        metrics.active_sessions.dec()
+
         return {"status": "deleted", "session_id": session_id}
     except HTTPException:
         raise
     except Exception as e:
+        metrics.errors_total.labels(type="session_deletion").inc()
         raise HTTPException(status_code=500, detail=f"Redis error: {str(e)}")

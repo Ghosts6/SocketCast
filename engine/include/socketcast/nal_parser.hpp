@@ -26,4 +26,8 @@ std::vector<NalUnit> scan_annex_b(const uint8_t* data, size_t len);
 // Split a NAL (or any blob) into transport-sized chunks (max kMaxPayloadLength).
 std::vector<std::vector<uint8_t>> chunk_payload(const uint8_t* data, size_t len);
 
+// True if `payload` begins with a 3- or 4-byte Annex B start code (i.e. is the
+// first chunk of a NAL unit, as opposed to a continuation fragment).
+bool starts_with_annex_b(const std::vector<uint8_t>& payload);
+
 }  // namespace socketcast
