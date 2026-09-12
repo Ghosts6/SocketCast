@@ -57,7 +57,9 @@ int main() {
         last_fps = req.fps;
         return "stream_test";
     });
-    admin.set_get_frames_callback([]() { return R"({"frames":[]})"; });
+    admin.set_get_frames_callback([]() {
+        return R"({"frames":[{"timestamp_us":0,"is_keyframe":true,"data_base64":"AAAB"}]})";
+    });
 
     require(admin.start(), "admin start");
     std::this_thread::sleep_for(std::chrono::milliseconds(50));
@@ -67,6 +69,31 @@ int main() {
         const auto resp = http_exchange(18081, "GET /admin/health HTTP/1.1\r\nHost: x\r\n\r\n");
         require(resp.find("200") != std::string::npos, "health 200");
         require(resp.find(R"("status":"ok")") != std::string::npos, "health body");
+    }
+
+    // GET /admin/frames returns whatever the callback produces
+    {
+        const auto resp = http_exchange(18081, "GET /admin/frames HTTP/1.1\r\nHost: x\r\n\r\n");
+        require(resp.find("200") != std::string::npos, "frames 200");
+        require(resp.find(R"("data_base64":"AAAB")") != std::string::npos, "frames body");
+    }
+
+    // GET /admin/audio: no callback registered yet -> 500 with json_error
+    {
+        const auto resp = http_exchange(18081, "GET /admin/audio HTTP/1.1\r\nHost: x\r\n\r\n");
+        require(resp.find("500") != std::string::npos, "audio 500 before callback set");
+        require(resp.find("no get audio callback") != std::string::npos, "audio error body");
+    }
+
+    // GET /admin/audio returns whatever the callback produces once registered
+    {
+        admin.set_get_audio_callback([]() {
+            return R"({"audio":[{"pts_us":0,"sample_rate":48000,"channels":2,)"
+                   R"("data_base64":"//FQ"}]})";
+        });
+        const auto resp = http_exchange(18081, "GET /admin/audio HTTP/1.1\r\nHost: x\r\n\r\n");
+        require(resp.find("200") != std::string::npos, "audio 200");
+        require(resp.find(R"("sample_rate":48000)") != std::string::npos, "audio body");
     }
 
     // Spaced JSON (Python json.dumps style) must parse

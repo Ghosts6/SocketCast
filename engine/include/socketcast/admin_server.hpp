@@ -7,6 +7,7 @@
 // - GET /admin/streams/{id}/stats
 // - GET /admin/stats (aggregate active-stream + listener stats)
 // - GET /admin/frames (retrieve buffered frames)
+// - GET /admin/audio (retrieve buffered audio frames)
 
 #include <atomic>
 #include <functional>
@@ -54,12 +55,14 @@ public:
     using StopStreamCallback = std::function<bool(const std::string&)>;
     using GetStatsCallback = std::function<bool(const std::string&, StreamStats&)>;
     using GetFramesCallback = std::function<std::string()>;
+    using GetAudioCallback = std::function<std::string()>;
     using GetAggregateStatsCallback = std::function<std::string()>;
 
     void set_start_stream_callback(StartStreamCallback cb) { start_stream_cb_ = cb; }
     void set_stop_stream_callback(StopStreamCallback cb) { stop_stream_cb_ = cb; }
     void set_get_stats_callback(GetStatsCallback cb) { get_stats_cb_ = cb; }
     void set_get_frames_callback(GetFramesCallback cb) { get_frames_cb_ = cb; }
+    void set_get_audio_callback(GetAudioCallback cb) { get_audio_cb_ = cb; }
     void set_get_aggregate_stats_callback(GetAggregateStatsCallback cb) {
         get_aggregate_stats_cb_ = std::move(cb);
     }
@@ -78,6 +81,7 @@ private:
     StopStreamCallback stop_stream_cb_;
     GetStatsCallback get_stats_cb_;
     GetFramesCallback get_frames_cb_;
+    GetAudioCallback get_audio_cb_;
     GetAggregateStatsCallback get_aggregate_stats_cb_;
 
     void run_server();

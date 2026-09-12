@@ -2,6 +2,7 @@
 // UDP + epoll event loop.
 
 #include "socketcast/admin_server.hpp"
+#include "socketcast/audio_buffer.hpp"
 #include "socketcast/frame_buffer.hpp"
 #include "socketcast/session.hpp"
 
@@ -56,6 +57,7 @@ private:
     bool on_stop_stream(const std::string& stream_id);
     bool on_get_stream_stats(const std::string& stream_id, StreamStats& stats);
     std::string on_get_frames();
+    std::string on_get_audio();
     std::string on_get_aggregate_stats();
 
     void wakeup_loop();
@@ -75,10 +77,14 @@ private:
     std::unique_ptr<Session> session_;
     RxCallback rx_callback_;
     std::unique_ptr<AdminServer> admin_server_;
+    // Admin connections now run one-per-thread; this serializes on_start_stream
+    // calls against each other (never against the packet-receive hot path).
+    std::mutex stream_start_mutex_;
     std::mutex active_streams_mutex_;
     std::map<std::string, std::unique_ptr<Session>> active_streams_;
     std::vector<std::string> pending_stream_starts_;
     std::unique_ptr<FrameBuffer> frame_buffer_;
+    std::unique_ptr<AudioBuffer> audio_buffer_;
     std::mutex param_sets_mutex_;
     std::vector<uint8_t> cached_sps_;
     std::vector<uint8_t> cached_pps_;

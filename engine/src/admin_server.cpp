@@ -90,7 +90,10 @@ void AdminServer::run_server() {
             continue;
         }
 
-        handle_connection(client_fd);
+        // One thread per connection: POST /admin/streams blocks for seconds
+        // (synchronous transcode), which would otherwise stall every other
+        // admin endpoint — including the frame/audio polling the dashboard needs.
+        std::thread(&AdminServer::handle_connection, this, client_fd).detach();
     }
 }
 
@@ -322,6 +325,15 @@ std::string AdminServer::handle_request(const std::string& method, const std::st
         }
         std::string frames_json = get_frames_cb_();
         return http_response(200, frames_json);
+    }
+
+    // GET /admin/audio (retrieve buffered AAC audio frames as base64)
+    if (method == "GET" && path == "/admin/audio") {
+        if (!get_audio_cb_) {
+            return http_response(500, json_error("no get audio callback"));
+        }
+        std::string audio_json = get_audio_cb_();
+        return http_response(200, audio_json);
     }
 
     // GET /admin/stats — aggregate listener + active admin stream stats

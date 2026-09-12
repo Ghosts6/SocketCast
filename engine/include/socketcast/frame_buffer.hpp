@@ -17,7 +17,9 @@ struct Frame {
 
 class FrameBuffer {
 public:
-    explicit FrameBuffer(size_t max_frames = 30);
+    // VOD sources burst-send (not paced to real time), so 30 was too small —
+    // the keyframe got evicted before the control plane's first poll caught it.
+    explicit FrameBuffer(size_t max_frames = 20000);
 
     // Add a frame (copies data). Returns true if added, false if buffer full.
     bool push_frame(const std::vector<uint8_t>& data, uint64_t timestamp_us, bool is_keyframe);

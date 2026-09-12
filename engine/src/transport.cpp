@@ -81,7 +81,10 @@ size_t annex_b_header_len(const std::vector<uint8_t>& payload) {
 }  // namespace
 
 Transport::Transport(std::string bind_address, uint16_t port)
-    : bind_address_(std::move(bind_address)), port_(port), frame_buffer_(std::make_unique<FrameBuffer>()) {
+    : bind_address_(std::move(bind_address)),
+      port_(port),
+      frame_buffer_(std::make_unique<FrameBuffer>()),
+      audio_buffer_(std::make_unique<AudioBuffer>()) {
     sock_ = ::socket(AF_INET, SOCK_DGRAM, 0);
     if (sock_ < 0) {
         throw std::runtime_error("socket() failed");
@@ -212,6 +215,7 @@ void Transport::on_readable() {
         // - ACK/NACK/Handshake only when stream_id matches
         // - Never deliver Data to initiators (same-socket loopback would echo our own
         //   media and corrupt initiator receive state / handshake).
+        bool is_admin_stream_echo = false;
         {
             std::lock_guard<std::mutex> lock(active_streams_mutex_);
             for (auto& [stream_id, stream] : active_streams_) {
@@ -219,6 +223,10 @@ void Transport::on_readable() {
                 const uint32_t sid = stream->stream_id();
                 const auto ptype = parsed->header.packet_type;
                 const uint8_t flags = parsed->header.flags;
+
+                if (sid != 0 && parsed->header.stream_id == sid) {
+                    is_admin_stream_echo = true;
+                }
 
                 bool deliver = false;
                 if (ptype == PacketType::Handshake && (flags & kFlagSyn) && (flags & kFlagAck) &&
@@ -236,8 +244,13 @@ void Transport::on_readable() {
             }
         }
 
-        // Capture complete Annex B NALs (flush when a new start code begins)
-        if (parsed->header.packet_type == PacketType::Data && !parsed->payload.empty()) {
+        // Capture complete Annex B NALs (flush when a new start code begins).
+        // Admin-initiated streams loop back to this same socket and are
+        // already captured on the send side (push_captured_frame); capturing
+        // them here too would duplicate every NAL under a bogus timestamp
+        // (this path falls back to wall-clock time, not media pts).
+        if (!is_admin_stream_echo && parsed->header.packet_type == PacketType::Data &&
+            !parsed->payload.empty()) {
             const uint64_t ts_us = parsed->header.timestamp_us != 0
                                        ? parsed->header.timestamp_us
                                        : static_cast<uint64_t>(
@@ -353,6 +366,9 @@ bool Transport::start_admin_server(uint16_t admin_port) {
     admin_server_->set_get_frames_callback([this]() {
         return this->on_get_frames();
     });
+    admin_server_->set_get_audio_callback([this]() {
+        return this->on_get_audio();
+    });
     admin_server_->set_get_aggregate_stats_callback([this]() {
         return this->on_get_aggregate_stats();
     });
@@ -397,8 +413,9 @@ void Transport::start_pending_streams() {
 }
 
 std::string Transport::on_start_stream(const StreamRequest& req) {
-    static uint32_t stream_counter = 0;
+    static std::atomic<uint32_t> stream_counter{0};
     std::string stream_id = "stream_" + std::to_string(++stream_counter);
+    std::lock_guard<std::mutex> start_lock(stream_start_mutex_);
 
     try {
         auto stream_session = std::make_unique<Session>(Session::Role::Initiator,
@@ -406,6 +423,20 @@ std::string Transport::on_start_stream(const StreamRequest& req) {
         auto source = std::make_unique<MediaSource>(req.input, req.fps);
         if (!source->open()) {
             return "";
+        }
+
+        // Audio doesn't ride the UDP wire protocol; video sends at burst speed
+        // (not paced to pts_us), so wall-clock-pacing audio would truncate it.
+        if (audio_buffer_) {
+            (void)audio_buffer_->get_all_frames();  // drop stale audio from prior stream
+            if (source->has_audio()) {
+                for (auto chunks = source->next_audio_chunks(64); !chunks.empty();
+                     chunks = source->next_audio_chunks(64)) {
+                    for (const auto& c : chunks) {
+                        audio_buffer_->push_frame(c.payload, c.pts_us, c.sample_rate, c.channels);
+                    }
+                }
+            }
         }
 
         // Set up frame capture callback so frames are buffered for dashboard
@@ -503,6 +534,24 @@ std::string Transport::on_get_frames() {
         oss << R"({"timestamp_us":)" << frame->timestamp_us
             << R"(,"is_keyframe":)" << (frame->is_keyframe ? "true" : "false")
             << R"(,"data_base64":")" << b64 << R"("})";
+    }
+    oss << R"(]})";
+    return oss.str();
+}
+
+std::string Transport::on_get_audio() {
+    auto frames = audio_buffer_->get_all_frames();
+    std::ostringstream oss;
+    oss << R"({"audio":[)";
+    bool first = true;
+    for (const auto& frame : frames) {
+        if (!first) {
+            oss << ",";
+        }
+        first = false;
+        oss << R"({"pts_us":)" << frame->timestamp_us << R"(,"sample_rate":)"
+            << frame->sample_rate << R"(,"channels":)" << static_cast<int>(frame->channels)
+            << R"(,"data_base64":")" << base64_encode(frame->data) << R"("})";
     }
     oss << R"(]})";
     return oss.str();
