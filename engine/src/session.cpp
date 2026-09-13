@@ -165,6 +165,16 @@ std::vector<Packet> Session::fill_window(std::chrono::steady_clock::time_point n
 
     if (media_mode_ && media_source_) {
         while (in_flight_.size() < kSendWindow && !media_source_->eof()) {
+            // Pace initial sends to the source's timeline — otherwise a
+            // LAN-speed send blasts a multi-minute clip out in a few seconds.
+            if (stream_start_set_) {
+                const uint64_t elapsed = steady_us(now) - stream_start_us_;
+                const uint64_t next_pts = media_source_->peek_next_pts_us();
+                if (next_pts > elapsed + kSendAheadUs) {
+                    break;
+                }
+            }
+
             const auto chunks = media_source_->next_chunks(1);
             if (chunks.empty()) {
                 break;
@@ -313,11 +323,16 @@ std::vector<Packet> Session::on_packet(const Packet& pkt,
             return out;
         }
         if (f & kFlagFin) {
-            fin_received_ = true;
-            out.push_back(make_handshake(kFlagFin | kFlagAck));
+            // Only a bare FIN gets acked — acking a FIN|ACK would echo forever
+            // over the self-loopback socket.
             if (f & kFlagAck) {
+                fin_received_ = true;
                 state_ = SessionState::Closed;
-            } else {
+                return out;
+            }
+            if (!fin_received_) {
+                fin_received_ = true;
+                out.push_back(make_handshake(kFlagFin | kFlagAck));
                 state_ = SessionState::Closing;
             }
             return out;

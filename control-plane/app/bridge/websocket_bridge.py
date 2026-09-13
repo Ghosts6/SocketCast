@@ -76,7 +76,9 @@ async def metrics_stream(websocket: WebSocket, session_id: str):
                         "packets_received": 0,
                         "bytes_received": 0,
                         "timestamp": datetime.now(UTC).isoformat(),
+                        "stream_active": False,
                     }
+                metrics.setdefault("stream_active", False)
 
                 # Live engine stats (admin aggregate) — keep Redis overrides if present
                 try:
@@ -111,6 +113,8 @@ async def metrics_stream(websocket: WebSocket, session_id: str):
                                 "packets_received": packets,
                                 "bytes_received": bytes_rx,
                                 "timestamp": now.isoformat(),
+                                # Lets the dashboard tell "no stream" apart from "0 = degraded".
+                                "stream_active": bool(eng.get("active_streams")),
                             }
                         )
                         await redis_client.setex(metrics_key, 3600, json.dumps(metrics))
@@ -186,28 +190,53 @@ async def stream_bridge(websocket: WebSocket, session_id: str):
                     pass
 
                 frames_data = None
+                audio_data = None
                 try:
                     resp = await client.get(f"{engine_admin_url}/admin/frames", timeout=1.0)
                     if resp.status_code == 200:
                         frames_data = resp.json()
-                except Exception as e:
+                except Exception:
                     prometheus_metrics.engine_connection_errors.inc()
                     frames_data = None
 
+                try:
+                    resp = await client.get(f"{engine_admin_url}/admin/audio", timeout=1.0)
+                    if resp.status_code == 200:
+                        audio_data = resp.json()
+                except Exception:
+                    prometheus_metrics.engine_connection_errors.inc()
+                    audio_data = None
+
                 frames = (frames_data or {}).get("frames") or []
-                if frames:
+                audio_frames = (audio_data or {}).get("audio") or []
+                if frames or audio_frames:
                     for frame in frames:
                         b64 = frame.get("data_base64") or ""
                         if not b64:
                             continue
                         try:
-                            # Decode base64 to binary H.264 Annex B data
                             raw = base64.b64decode(b64)
                             if raw:
-                                # Send binary frame directly
-                                await websocket.send_bytes(raw)
+                                # Wire format: [1B type=0][8B pts_us big-endian][payload].
+                                pts_us = int(frame.get("timestamp_us") or 0)
+                                header = b"\x00" + pts_us.to_bytes(8, "big")
+                                await websocket.send_bytes(header + raw)
                                 prometheus_metrics.frames_received.inc()
                                 frame_count += 1
+                        except Exception:
+                            continue
+                    for audio_frame in audio_frames:
+                        b64 = audio_frame.get("data_base64") or ""
+                        if not b64:
+                            continue
+                        try:
+                            raw = base64.b64decode(b64)
+                            if raw:
+                                # type 1 = audio
+                                pts_us = int(audio_frame.get("pts_us") or 0)
+                                header = b"\x01" + pts_us.to_bytes(8, "big")
+                                await websocket.send_bytes(header + raw)
+                                prometheus_metrics.audio_frames_received.inc()
                         except Exception:
                             continue
                     last_heartbeat = asyncio.get_event_loop().time()
@@ -221,8 +250,8 @@ async def stream_bridge(websocket: WebSocket, session_id: str):
                         })
                         last_heartbeat = now
 
-                # Small delay to avoid tight loop
-                await asyncio.sleep(0.01)
+                # Delay to let frame buffer accumulate (was 10ms, causing drain faster than fill)
+                await asyncio.sleep(0.05)
 
     except WebSocketDisconnect:
         pass

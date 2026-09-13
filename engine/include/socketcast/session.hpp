@@ -75,6 +75,9 @@ private:
     static constexpr int kMaxRetries = 20;
     static constexpr uint32_t kListenerStreamId = 1;
     static constexpr uint64_t kSafetyMarginUs = 50'000;
+    // How far ahead of the real playback clock the initial send may run —
+    // without it, fill_window() drains the whole file at link speed.
+    static constexpr uint64_t kSendAheadUs = 250'000;
 
     struct InFlight {
         Packet packet;

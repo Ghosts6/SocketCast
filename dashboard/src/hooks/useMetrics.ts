@@ -11,6 +11,7 @@ const DEFAULT_METRICS: StreamMetrics = {
   jitterMs: 0,
   lossPercent: 0,
   rttMs: 0,
+  streamActive: false,
 };
 
 export function useMetrics(connected: boolean, sessionId?: string) {
@@ -46,6 +47,7 @@ export function useMetrics(connected: boolean, sessionId?: string) {
               jitterMs: m.jitter_ms || 0,
               lossPercent: m.loss_percent || 0,
               rttMs: m.rtt_ms || 0,
+              streamActive: Boolean(m.stream_active),
             });
           }
         } catch (err) {

@@ -30,7 +30,7 @@ class JSONFormatter(logging.Formatter):
 
 handler = logging.StreamHandler(sys.stdout)
 handler.setFormatter(JSONFormatter())
-logging.basicConfig(level=logging.INFO, handlers=[handler])
+logging.basicConfig(level=settings.socketcast_log_level.upper(), handlers=[handler])
 logger = logging.getLogger("socketcast.control-plane")
 
 # Validate configuration on startup

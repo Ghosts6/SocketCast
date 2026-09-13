@@ -39,6 +39,7 @@ function StatusIndicator({ connected }: { connected: boolean }) {
 export function MetricsPanel({ metrics, connected }: MetricsPanelProps) {
   const lossWarning = metrics.lossPercent > 5;
   const rttWarning = metrics.rttMs > 100;
+  const noStream = connected && !metrics.streamActive;
 
   return (
     <div className="space-y-4">
@@ -51,14 +52,22 @@ export function MetricsPanel({ metrics, connected }: MetricsPanelProps) {
       {/* Key Metrics */}
       <div className="bg-white dark:bg-neutral-900 rounded-lg p-4 border border-neutral-200 dark:border-neutral-800">
         <h3 className="text-xs font-semibold text-neutral-700 dark:text-neutral-300 uppercase tracking-wider mb-4">Network Metrics</h3>
-        <div className="grid grid-cols-1 gap-3">
+
+        {noStream && (
+          <div className="mb-3 p-3 bg-blue-50 dark:bg-blue-500/10 border border-blue-200 dark:border-blue-500/30 rounded text-xs text-blue-600 dark:text-blue-400">
+            ℹ No stream running, these are placeholder zeros, not live measurements.
+            Start one with <code className="font-mono">scripts/start_stream.sh</code>.
+          </div>
+        )}
+
+        <div className={`grid grid-cols-1 gap-3 ${noStream ? "opacity-50" : ""}`}>
           <MetricCard label="Bitrate" value={metrics.currentBitrateMbps} unit="Mbps" trend="stable" />
           <MetricCard label="RTT" value={metrics.rttMs} unit="ms" trend={rttWarning ? "up" : "stable"} />
           <MetricCard label="Jitter" value={metrics.jitterMs} unit="ms" trend="stable" />
           <MetricCard label="Loss" value={metrics.lossPercent} unit="%" trend={lossWarning ? "up" : "down"} />
         </div>
 
-        {(lossWarning || rttWarning) && (
+        {!noStream && (lossWarning || rttWarning) && (
           <div className="mt-3 p-3 bg-orange-50 dark:bg-orange-500/10 border border-orange-200 dark:border-orange-500/30 rounded text-xs text-orange-600 dark:text-orange-400">
             ⚠ Network degradation detected
           </div>

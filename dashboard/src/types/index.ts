@@ -13,6 +13,7 @@ export interface StreamMetrics {
   jitterMs: number;
   lossPercent: number;
   rttMs: number;
+  streamActive: boolean;
 }
 
 export interface StreamFrame {

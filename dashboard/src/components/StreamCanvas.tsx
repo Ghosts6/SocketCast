@@ -28,14 +28,35 @@ function MinimizeIcon() {
   );
 }
 
+function VolumeIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="w-4 h-4">
+      <path d="M11 5 6 9H2v6h4l5 4V5z" />
+      <path d="M19.07 4.93a10 10 0 0 1 0 14.14" />
+      <path d="M15.54 8.46a5 5 0 0 1 0 7.07" />
+    </svg>
+  );
+}
+
+function VolumeMutedIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="w-4 h-4">
+      <path d="M11 5 6 9H2v6h4l5 4V5z" />
+      <line x1="23" y1="9" x2="17" y2="15" />
+      <line x1="17" y1="9" x2="23" y2="15" />
+    </svg>
+  );
+}
+
 export function StreamCanvas({ connected, sessionId }: StreamCanvasProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const [fps, setFps] = useState(0);
   const lastCountRef = useRef(0);
   const [isFullscreen, setIsFullscreen] = useState(false);
+  const [muted, setMuted] = useState(false);
 
-  const { frameCount } = useStream(canvasRef, connected, sessionId);
+  const { frameCount } = useStream(canvasRef, connected, sessionId, muted);
 
   useEffect(() => {
     const handleFullscreenChange = () => {
@@ -110,8 +131,17 @@ export function StreamCanvas({ connected, sessionId }: StreamCanvasProps) {
           )}
         </div>
 
-        {/* Fullscreen controls */}
+        {/* Fullscreen + audio controls */}
         <div className="absolute top-3 right-3 flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+          <button
+            type="button"
+            onClick={() => setMuted((m) => !m)}
+            className="p-1.5 rounded bg-black/50 text-white hover:bg-black/70 transition-colors"
+            aria-label={muted ? "Unmute" : "Mute"}
+            title={muted ? "Unmute" : "Mute"}
+          >
+            {muted ? <VolumeMutedIcon /> : <VolumeIcon />}
+          </button>
           <button
             type="button"
             onClick={toggleFullscreen}

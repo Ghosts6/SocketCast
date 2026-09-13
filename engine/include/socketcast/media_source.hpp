@@ -29,7 +29,11 @@ public:
 
     bool open();
     bool eof() const { return eof_; }
-  std::vector<MediaChunk> next_chunks(size_t max_chunks = 16);
+    std::vector<MediaChunk> next_chunks(size_t max_chunks = 16);
+
+    // PTS of the next unconsumed chunk, for real-time send pacing. Caller must
+    // check !eof() first — undefined when the queue is empty.
+    uint64_t peek_next_pts_us() const { return pending_[pending_cursor_].pts_us; }
 
     bool has_audio() const { return !audio_pending_.empty(); }
     std::vector<AudioChunk> next_audio_chunks(size_t max_chunks = 16);

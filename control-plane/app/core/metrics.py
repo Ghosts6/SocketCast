@@ -47,6 +47,11 @@ frames_received = Counter(
     "Total frames received from engine",
 )
 
+audio_frames_received = Counter(
+    "socketcast_audio_frames_received_total",
+    "Total audio frames received from engine",
+)
+
 # WebSocket metrics
 websocket_connections = Gauge(
     "socketcast_websocket_connections",
