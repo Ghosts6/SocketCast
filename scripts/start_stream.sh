@@ -1,9 +1,20 @@
 #!/bin/bash
-# Start a video stream into the SocketCast engine (Docker: file must be under Doc/dev → /media).
+# Start a video stream into the SocketCast engine (Docker: file must be under Resource/media → /media).
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-VIDEO="${1:-$ROOT/Doc/dev/Rick-Astley-Never-Gonna-Give-You-Up-Official-Music-Video.mp4}"
+
+if [[ -n "${1:-}" ]]; then
+  VIDEO="$1"
+else
+  read -rp "Path to video file (under Resource/media/): " VIDEO
+fi
+
+if [[ -z "$VIDEO" ]]; then
+  echo "✗ No path given."
+  exit 1
+fi
+
 VIDEO_PATH="/media/$(basename "$VIDEO")"
 
 echo "SocketCast Stream Starter"
@@ -14,7 +25,7 @@ echo ""
 
 if [[ ! -f "$VIDEO" ]]; then
   echo "✗ Video not found on host: $VIDEO"
-  echo "  Place the file under Doc/dev/ (mounted into the engine as /media/)."
+  echo "  Place the file under Resource/media/ (mounted into the engine as /media/)."
   exit 1
 fi
 

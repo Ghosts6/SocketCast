@@ -120,6 +120,12 @@ export function useStream(
     let sps: Uint8Array | null = null;
     let pps: Uint8Array | null = null;
     let needKey = true;
+    // pts is strictly increasing from the source; anything at or before what
+    // we've already decoded is a stale resend (see the engine's keyframe
+    // resend below), not new content — splicing it back in would break the
+    // H.264 reference chain and cause visible macroblocking.
+    let highestDecodedPtsUs = -1;
+    let lastKeyframePtsUs = -1;
     let cancelled = false;
     let pingTimer: number | undefined;
     let statusTimer: number | undefined;
@@ -138,24 +144,38 @@ export function useStream(
     let rafHandle: number | null = null;
     const kMaxQueuedFrames = 60;
 
+    let debugFirstVideoLogged = false;
+    let debugMsgCount = 0;
+    let debugDecodeCount = 0;
     const drawFrame = (frame: VideoFrame) => {
       if (canvasRef.current) {
         const ctx = canvasRef.current.getContext("2d");
         if (ctx) {
           ctx.drawImage(frame, 0, 0, canvasRef.current.width, canvasRef.current.height);
         }
+        if (!debugFirstVideoLogged) {
+          debugFirstVideoLogged = true;
+          console.log(`[SYNC] first video frame drawn at perf=${performance.now().toFixed(1)}ms, pts=${(frame.timestamp / 1000).toFixed(1)}ms`);
+        }
         frameCountRef.current += 1;
       }
       frame.close();
     };
 
+    let debugLastRenderLog = 0;
     const renderLoop = () => {
       if (cancelled) return;
       const nowMs = performance.now();
 
+      if (nowMs - debugLastRenderLog > 1000) {
+        debugLastRenderLog = nowMs;
+        console.log(`[RENDER] tick nowMs=${nowMs.toFixed(0)} queueLen=${renderQueue.length} anchorPerf=${renderAnchorPerfMs?.toFixed(0)} anchorPts=${renderAnchorPtsMs?.toFixed(0)} frontPts=${renderQueue[0] ? (renderQueue[0].timestamp / 1000).toFixed(0) : "none"}`);
+      }
+
       if (renderAnchorPerfMs == null && renderQueue.length > 0) {
         renderAnchorPerfMs = nowMs;
         renderAnchorPtsMs = renderQueue[0].timestamp / 1000;
+        console.log(`[RENDER] anchor SET perf=${renderAnchorPerfMs.toFixed(0)} pts=${renderAnchorPtsMs.toFixed(0)}`);
       }
 
       while (renderQueue.length > kMaxQueuedFrames) {
@@ -164,7 +184,18 @@ export function useStream(
 
       while (renderQueue.length > 0) {
         const framePtsMs = renderQueue[0].timestamp / 1000;
-        const dueAt = renderAnchorPerfMs! + (framePtsMs - renderAnchorPtsMs!);
+        let dueAt = renderAnchorPerfMs! + (framePtsMs - renderAnchorPtsMs!);
+
+        // A pts far ahead of schedule (e.g. jumping from a resent stale
+        // keyframe to the live buffer's position) would idle out the gap —
+        // resync to "now" instead, the gap was never real playback time.
+        const kMaxScheduleAheadMs = 1000;
+        if (dueAt > nowMs + kMaxScheduleAheadMs) {
+          renderAnchorPerfMs = nowMs;
+          renderAnchorPtsMs = framePtsMs;
+          dueAt = nowMs;
+        }
+
         if (nowMs < dueAt) break;
 
         const frame = renderQueue.shift()!;
@@ -193,6 +224,8 @@ export function useStream(
       decoder = null;
       configured = false;
       needKey = true;
+      highestDecodedPtsUs = -1;
+      lastKeyframePtsUs = -1;
       while (renderQueue.length > 0) {
         renderQueue.shift()!.close();
       }
@@ -210,6 +243,7 @@ export function useStream(
       audioConfigured = false;
     };
 
+    let debugFirstAudioLogged = false;
     const scheduleAudio = (audioData: AudioData) => {
       if (!audioCtx || !gainNode) {
         audioData.close();
@@ -227,6 +261,10 @@ export function useStream(
         source.buffer = buffer;
         source.connect(gainNode);
         const startAt = Math.max(audioCtx.currentTime, nextAudioTime);
+        if (!debugFirstAudioLogged) {
+          debugFirstAudioLogged = true;
+          console.log(`[SYNC] first audio chunk scheduled at perf=${performance.now().toFixed(1)}ms, pts=${(audioData.timestamp / 1000).toFixed(1)}ms, audioCtx.currentTime=${audioCtx.currentTime.toFixed(3)}s, startAt=${startAt.toFixed(3)}s, audioCtx.state=${audioCtx.state}`);
+        }
         source.start(startAt);
         nextAudioTime = startAt + buffer.duration;
       } catch (err) {
@@ -245,6 +283,7 @@ export function useStream(
       if (!AudioCtxCtor) return;
       if (!audioCtx) {
         audioCtx = new AudioCtxCtor();
+        console.log(`[SYNC] AudioContext created at perf=${performance.now().toFixed(1)}ms, state=${audioCtx.state}`);
         gainNode = audioCtx.createGain();
         gainNode.gain.value = mutedRef.current ? 0 : 1;
         gainNode.connect(audioCtx.destination);
@@ -291,16 +330,20 @@ export function useStream(
               frame.close();
               return;
             }
+            if (debugDecodeCount <= 12) {
+              console.log(`[RENDER] push perf=${performance.now().toFixed(0)} pts=${(frame.timestamp / 1000).toFixed(0)} newQueueLen=${renderQueue.length + 1}`);
+            }
             renderQueue.push(frame);
           },
           error: (err) => {
-            console.error("VideoDecoder error:", err);
+            console.error(`VideoDecoder error (after ${debugDecodeCount} decode() calls, highestDecodedPtsUs=${highestDecodedPtsUs}):`, err);
             drawStatus(canvas, "Decoder error — receiving bytes", bytesRef.current);
             closeDecoder();
           },
         });
         const codec = codecFromSps(sps);
         const avcC = buildAvcC(sps, pps);
+        console.log(`[NAL] configuring decoder: codec=${codec} sps_len=${sps.length} pps_len=${pps.length} sps_hex=${Array.from(sps).map((b) => b.toString(16).padStart(2, "0")).join(" ")} pps_hex=${Array.from(pps).map((b) => b.toString(16).padStart(2, "0")).join(" ")}`);
 
         try {
           decoder.configure({
@@ -320,6 +363,7 @@ export function useStream(
 
         configured = true;
         needKey = true;
+        console.log(`[SYNC] VideoDecoder configured at perf=${performance.now().toFixed(1)}ms`);
         drawStatus(canvas, "Decoder ready — waiting for keyframe", bytesRef.current);
       } catch (err) {
         console.error("Failed to configure VideoDecoder:", err);
@@ -334,6 +378,7 @@ export function useStream(
       websocket.binaryType = "arraybuffer";
 
       websocket.onopen = () => {
+        console.log(`[SYNC] WS opened at perf=${performance.now().toFixed(1)}ms`);
         drawStatus(canvas, "Waiting for H.264…");
         pingTimer = window.setInterval(() => {
           if (websocket?.readyState === WebSocket.OPEN) websocket.send("ping");
@@ -392,6 +437,12 @@ export function useStream(
 
         const nal = stripStartCode(data);
 
+        if (debugMsgCount < 25) {
+          debugMsgCount++;
+          const hex = Array.from(nal.slice(0, 10)).map((b) => b.toString(16).padStart(2, "0")).join(" ");
+          console.log(`[NAL] #${debugMsgCount} type=${type} pts=${ptsUs} len=${nal.length} bytes=${hex}`);
+        }
+
         if (type === 7) {
           sps = nal.slice();
           ensureDecoder();
@@ -413,7 +464,20 @@ export function useStream(
         if (needKey && type !== 5) {
           return;
         }
-        if (type === 5) needKey = false;
+        if (ptsUs <= highestDecodedPtsUs) return;
+
+        // A P-frame this far past the last keyframe we decoded almost
+        // certainly references frames we never saw — decode would "succeed"
+        // but produce macroblocking. Bail back to waiting for a real keyframe.
+        const kMaxGopGapUs = 1_000_000;
+        if (type !== 5 && ptsUs - lastKeyframePtsUs > kMaxGopGapUs) {
+          needKey = true;
+          return;
+        }
+        if (type === 5) {
+          needKey = false;
+          lastKeyframePtsUs = ptsUs;
+        }
 
         try {
           // avcC declares 4-byte length-prefixed NALs, not Annex-B start codes.
@@ -422,7 +486,12 @@ export function useStream(
             timestamp: ptsUs,
             data: toLengthPrefixed(nal),
           });
+          if (debugDecodeCount < 10) {
+            debugDecodeCount++;
+            console.log(`[NAL] decode() call #${debugDecodeCount}: type=${type === 5 ? "key" : "delta"} pts=${ptsUs} len=${nal.length} decodeQueueSize=${decoder.decodeQueueSize}`);
+          }
           decoder.decode(chunk);
+          highestDecodedPtsUs = ptsUs;
         } catch (err) {
           console.error("decode failed:", err);
         }

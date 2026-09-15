@@ -460,6 +460,9 @@ std::string Transport::on_start_stream(const StreamRequest& req) {
             std::lock_guard<std::mutex> lock(param_sets_mutex_);
             cached_sps_.clear();
             cached_pps_.clear();
+            cached_keyframe_.clear();
+            cached_keyframe_ts_us_ = 0;
+            last_keyframe_resend_ = {};
         }
         frame_accumulator_.clear();
         if (frame_buffer_) {
@@ -505,10 +508,13 @@ std::string Transport::on_get_frames() {
     bool first = true;
 
     // Always prepend cached SPS/PPS so a late-joining browser can configure
-    // WebCodecs even if it connects mid-GOP.
+    // WebCodecs mid-GOP. Also periodically re-prepend the last keyframe —
+    // without it a fresh viewer sees only undecodable P-frames until the next
+    // natural keyframe (~8.3s away by default), so video stays black that
+    // whole time. Resent on a timer, not every poll, since it's tens of KB.
     {
         std::lock_guard<std::mutex> lock(param_sets_mutex_);
-        auto emit = [&](const std::vector<uint8_t>& nal, bool key) {
+        auto emit = [&](const std::vector<uint8_t>& nal, bool key, uint64_t ts_us) {
             if (nal.empty()) {
                 return;
             }
@@ -516,12 +522,20 @@ std::string Transport::on_get_frames() {
                 oss << ",";
             }
             first = false;
-            oss << R"({"timestamp_us":0,"is_keyframe":)" << (key ? "true" : "false")
+            oss << R"({"timestamp_us":)" << ts_us << R"(,"is_keyframe":)" << (key ? "true" : "false")
                 << R"(,"data_base64":")" << base64_encode(nal) << R"("})";
         };
         if (!frames.empty()) {
-            emit(cached_sps_, false);
-            emit(cached_pps_, false);
+            emit(cached_sps_, false, 0);
+            emit(cached_pps_, false, 0);
+
+            constexpr auto kKeyframeResendInterval = std::chrono::milliseconds(500);
+            const auto now = std::chrono::steady_clock::now();
+            if (!cached_keyframe_.empty() &&
+                now - last_keyframe_resend_ >= kKeyframeResendInterval) {
+                emit(cached_keyframe_, true, cached_keyframe_ts_us_);
+                last_keyframe_resend_ = now;
+            }
         }
     }
 
@@ -580,6 +594,11 @@ void Transport::cache_parameter_set(const std::vector<uint8_t>& annex_b) {
 void Transport::push_captured_frame(const std::vector<uint8_t>& frame_data, uint64_t ts_us,
                                     bool is_keyframe) {
     cache_parameter_set(frame_data);
+    if (is_keyframe) {
+        std::lock_guard<std::mutex> lock(param_sets_mutex_);
+        cached_keyframe_ = frame_data;
+        cached_keyframe_ts_us_ = ts_us;
+    }
     frame_buffer_->push_frame(frame_data, ts_us, is_keyframe);
 }
 

@@ -152,10 +152,10 @@ The full demo stack — engine, control plane, dashboard, Redis, Prometheus, and
 docker compose up -d --build
 ```
 
-Then, to stream a video into the running stack — the file must live under `Doc/dev/`, since that's the directory mounted into the engine container as `/media/`:
+Then, to stream a video into the running stack — the file must live under `Resource/media/`, since that's the directory mounted into the engine container as `/media/`:
 
 ```bash
-bash scripts/start_stream.sh Doc/dev/your-video.mp4
+bash scripts/start_stream.sh Resource/media/your-video.mp4
 ```
 
 Open `http://localhost:5173`, enter `127.0.0.1` / `5000` in Session Control, and click **Connect** to watch. Starting a stream and viewing it are deliberately separate steps — Connect only opens the viewer, it does not start a stream.
@@ -172,7 +172,7 @@ All scripts are in `scripts/` and assume you're in the repo root.
 
 ```bash
 docker compose up -d --build          # start the full stack first
-bash scripts/start_stream.sh [/path/to/video.mp4]   # defaults to a file under Doc/dev/
+bash scripts/start_stream.sh Resource/media/your-video.mp4
 ```
 
 Open `http://localhost:5173`, connect to `127.0.0.1:5000`, then run the script — it waits for services, posts the stream request to the engine's admin API, and confirms packets are actually flowing before exiting (the stream keeps running in the engine independently of the script).
