@@ -2,7 +2,7 @@ import { useEffect, useRef } from "react";
 
 const WS_BASE = import.meta.env.VITE_WS_BASE || "ws://localhost:8000/ws";
 
-function nalType(data: Uint8Array): number | null {
+export function nalType(data: Uint8Array): number | null {
   let i = 0;
   if (data.length >= 4 && data[0] === 0 && data[1] === 0 && data[2] === 0 && data[3] === 1) {
     i = 4;
@@ -15,7 +15,7 @@ function nalType(data: Uint8Array): number | null {
   return data[i] & 0x1f;
 }
 
-function stripStartCode(data: Uint8Array): Uint8Array {
+export function stripStartCode(data: Uint8Array): Uint8Array {
   if (data.length >= 4 && data[0] === 0 && data[1] === 0 && data[2] === 0 && data[3] === 1) {
     return data.subarray(4);
   }
@@ -25,7 +25,7 @@ function stripStartCode(data: Uint8Array): Uint8Array {
   return data;
 }
 
-function toLengthPrefixed(nal: Uint8Array): Uint8Array {
+export function toLengthPrefixed(nal: Uint8Array): Uint8Array {
   const out = new Uint8Array(4 + nal.length);
   const len = nal.length;
   out[0] = (len >>> 24) & 0xff;
@@ -36,7 +36,7 @@ function toLengthPrefixed(nal: Uint8Array): Uint8Array {
   return out;
 }
 
-function buildAvcC(sps: Uint8Array, pps: Uint8Array): Uint8Array {
+export function buildAvcC(sps: Uint8Array, pps: Uint8Array): Uint8Array {
   // avcC box (ISO/IEC 14496-15): SPS/PPS entries store the complete NAL unit,
   // header byte included — not just the RBSP.
   const out = new Uint8Array(11 + sps.length + pps.length);
@@ -58,7 +58,7 @@ function buildAvcC(sps: Uint8Array, pps: Uint8Array): Uint8Array {
   return out;
 }
 
-function codecFromSps(sps: Uint8Array): string {
+export function codecFromSps(sps: Uint8Array): string {
   const profile = sps[1].toString(16).padStart(2, "0");
   const compat = sps[2].toString(16).padStart(2, "0");
   const level = sps[3].toString(16).padStart(2, "0");
@@ -66,11 +66,11 @@ function codecFromSps(sps: Uint8Array): string {
 }
 
 // Wire format: [1B type][8B pts_us big-endian][payload].
-const kTypeVideo = 0x00;
-const kTypeAudio = 0x01;
-const kFrameHeaderLen = 9;
+export const kTypeVideo = 0x00;
+export const kTypeAudio = 0x01;
+export const kFrameHeaderLen = 9;
 
-function readPtsUs(data: Uint8Array): number {
+export function readPtsUs(data: Uint8Array): number {
   const view = new DataView(data.buffer, data.byteOffset + 1, 8);
   return Number(view.getBigUint64(0, false));
 }
@@ -125,7 +125,6 @@ export function useStream(
     // resend below), not new content — splicing it back in would break the
     // H.264 reference chain and cause visible macroblocking.
     let highestDecodedPtsUs = -1;
-    let lastKeyframePtsUs = -1;
     let cancelled = false;
     let pingTimer: number | undefined;
     let statusTimer: number | undefined;
@@ -144,38 +143,106 @@ export function useStream(
     let rafHandle: number | null = null;
     const kMaxQueuedFrames = 60;
 
-    let debugFirstVideoLogged = false;
-    let debugMsgCount = 0;
-    let debugDecodeCount = 0;
+    // Engine/bridge bulk-drains the whole AudioBuffer on first poll — keep
+    // encoded packets and only decode/schedule near the video playhead so we
+    // can PTS-align instead of chaining ASAP on a suspended AudioContext.
+    const audioPacketQueue: { ptsUs: number; data: Uint8Array }[] = [];
+    const kAudioScheduleAheadSec = 0.75;
+    const kAudioLateSlackSec = 0.05;
+
     const drawFrame = (frame: VideoFrame) => {
       if (canvasRef.current) {
         const ctx = canvasRef.current.getContext("2d");
         if (ctx) {
           ctx.drawImage(frame, 0, 0, canvasRef.current.width, canvasRef.current.height);
         }
-        if (!debugFirstVideoLogged) {
-          debugFirstVideoLogged = true;
-          console.log(`[SYNC] first video frame drawn at perf=${performance.now().toFixed(1)}ms, pts=${(frame.timestamp / 1000).toFixed(1)}ms`);
-        }
         frameCountRef.current += 1;
       }
       frame.close();
     };
 
-    let debugLastRenderLog = 0;
+    const videoMediaSec = (): number | null => {
+      if (renderAnchorPerfMs == null || renderAnchorPtsMs == null) return null;
+      return (renderAnchorPtsMs + (performance.now() - renderAnchorPerfMs)) / 1000;
+    };
+
+    const scheduleAudio = (audioData: AudioData) => {
+      if (!audioCtx || !gainNode) {
+        audioData.close();
+        return;
+      }
+      const vMedia = videoMediaSec();
+      if (vMedia == null || audioCtx.state !== "running") {
+        audioData.close();
+        return;
+      }
+      try {
+        const { numberOfChannels, numberOfFrames, sampleRate } = audioData;
+        const ptsSec = audioData.timestamp / 1_000_000;
+        if (ptsSec < vMedia - kAudioLateSlackSec) {
+          audioData.close();
+          return;
+        }
+        const buffer = audioCtx.createBuffer(numberOfChannels, numberOfFrames, sampleRate);
+        const channelData = new Float32Array(numberOfFrames);
+        for (let ch = 0; ch < numberOfChannels; ch++) {
+          audioData.copyTo(channelData, { planeIndex: ch, format: "f32-planar" });
+          buffer.copyToChannel(channelData, ch);
+        }
+        const source = audioCtx.createBufferSource();
+        source.buffer = buffer;
+        source.connect(gainNode);
+        // Align this chunk's media pts to the same clock the video render loop uses.
+        const startAt = Math.max(
+          audioCtx.currentTime + 0.01,
+          audioCtx.currentTime + (ptsSec - vMedia),
+          nextAudioTime,
+        );
+        source.start(startAt);
+        nextAudioTime = startAt + buffer.duration;
+      } catch (err) {
+        console.error("audio schedule failed:", err);
+      } finally {
+        audioData.close();
+      }
+    };
+
+    const pumpAudio = () => {
+      if (!audioDecoder || audioDecoder.state !== "configured" || !audioCtx) return;
+      if (audioCtx.state === "suspended") {
+        audioCtx.resume().catch(() => {});
+        return;
+      }
+      if (audioCtx.state !== "running") return;
+      const vMedia = videoMediaSec();
+      if (vMedia == null) return;
+
+      while (audioPacketQueue.length > 0) {
+        const pkt = audioPacketQueue[0];
+        const ptsSec = pkt.ptsUs / 1_000_000;
+        if (ptsSec < vMedia - kAudioLateSlackSec) {
+          audioPacketQueue.shift();
+          continue;
+        }
+        if (ptsSec > vMedia + kAudioScheduleAheadSec) break;
+        audioPacketQueue.shift();
+        try {
+          audioDecoder.decode(
+            new EncodedAudioChunk({ type: "key", timestamp: pkt.ptsUs, data: pkt.data }),
+          );
+        } catch (err) {
+          console.error("audio decode failed:", err);
+        }
+      }
+    };
+
     const renderLoop = () => {
       if (cancelled) return;
       const nowMs = performance.now();
 
-      if (nowMs - debugLastRenderLog > 1000) {
-        debugLastRenderLog = nowMs;
-        console.log(`[RENDER] tick nowMs=${nowMs.toFixed(0)} queueLen=${renderQueue.length} anchorPerf=${renderAnchorPerfMs?.toFixed(0)} anchorPts=${renderAnchorPtsMs?.toFixed(0)} frontPts=${renderQueue[0] ? (renderQueue[0].timestamp / 1000).toFixed(0) : "none"}`);
-      }
-
       if (renderAnchorPerfMs == null && renderQueue.length > 0) {
         renderAnchorPerfMs = nowMs;
         renderAnchorPtsMs = renderQueue[0].timestamp / 1000;
-        console.log(`[RENDER] anchor SET perf=${renderAnchorPerfMs.toFixed(0)} pts=${renderAnchorPtsMs.toFixed(0)}`);
       }
 
       while (renderQueue.length > kMaxQueuedFrames) {
@@ -211,9 +278,9 @@ export function useStream(
         drawFrame(frame);
       }
 
+      pumpAudio();
       rafHandle = requestAnimationFrame(renderLoop);
     };
-    rafHandle = requestAnimationFrame(renderLoop);
 
     const closeDecoder = () => {
       try {
@@ -225,7 +292,6 @@ export function useStream(
       configured = false;
       needKey = true;
       highestDecodedPtsUs = -1;
-      lastKeyframePtsUs = -1;
       while (renderQueue.length > 0) {
         renderQueue.shift()!.close();
       }
@@ -243,37 +309,6 @@ export function useStream(
       audioConfigured = false;
     };
 
-    let debugFirstAudioLogged = false;
-    const scheduleAudio = (audioData: AudioData) => {
-      if (!audioCtx || !gainNode) {
-        audioData.close();
-        return;
-      }
-      try {
-        const { numberOfChannels, numberOfFrames, sampleRate } = audioData;
-        const buffer = audioCtx.createBuffer(numberOfChannels, numberOfFrames, sampleRate);
-        const channelData = new Float32Array(numberOfFrames);
-        for (let ch = 0; ch < numberOfChannels; ch++) {
-          audioData.copyTo(channelData, { planeIndex: ch, format: "f32-planar" });
-          buffer.copyToChannel(channelData, ch);
-        }
-        const source = audioCtx.createBufferSource();
-        source.buffer = buffer;
-        source.connect(gainNode);
-        const startAt = Math.max(audioCtx.currentTime, nextAudioTime);
-        if (!debugFirstAudioLogged) {
-          debugFirstAudioLogged = true;
-          console.log(`[SYNC] first audio chunk scheduled at perf=${performance.now().toFixed(1)}ms, pts=${(audioData.timestamp / 1000).toFixed(1)}ms, audioCtx.currentTime=${audioCtx.currentTime.toFixed(3)}s, startAt=${startAt.toFixed(3)}s, audioCtx.state=${audioCtx.state}`);
-        }
-        source.start(startAt);
-        nextAudioTime = startAt + buffer.duration;
-      } catch (err) {
-        console.error("audio schedule failed:", err);
-      } finally {
-        audioData.close();
-      }
-    };
-
     const ensureAudioDecoder = () => {
       if (typeof AudioDecoder === "undefined") return;
       if (audioConfigured && audioDecoder && audioDecoder.state === "configured") return;
@@ -283,7 +318,6 @@ export function useStream(
       if (!AudioCtxCtor) return;
       if (!audioCtx) {
         audioCtx = new AudioCtxCtor();
-        console.log(`[SYNC] AudioContext created at perf=${performance.now().toFixed(1)}ms, state=${audioCtx.state}`);
         gainNode = audioCtx.createGain();
         gainNode.gain.value = mutedRef.current ? 0 : 1;
         gainNode.connect(audioCtx.destination);
@@ -330,20 +364,16 @@ export function useStream(
               frame.close();
               return;
             }
-            if (debugDecodeCount <= 12) {
-              console.log(`[RENDER] push perf=${performance.now().toFixed(0)} pts=${(frame.timestamp / 1000).toFixed(0)} newQueueLen=${renderQueue.length + 1}`);
-            }
             renderQueue.push(frame);
           },
           error: (err) => {
-            console.error(`VideoDecoder error (after ${debugDecodeCount} decode() calls, highestDecodedPtsUs=${highestDecodedPtsUs}):`, err);
+            console.error("VideoDecoder error:", err);
             drawStatus(canvas, "Decoder error — receiving bytes", bytesRef.current);
             closeDecoder();
           },
         });
         const codec = codecFromSps(sps);
         const avcC = buildAvcC(sps, pps);
-        console.log(`[NAL] configuring decoder: codec=${codec} sps_len=${sps.length} pps_len=${pps.length} sps_hex=${Array.from(sps).map((b) => b.toString(16).padStart(2, "0")).join(" ")} pps_hex=${Array.from(pps).map((b) => b.toString(16).padStart(2, "0")).join(" ")}`);
 
         try {
           decoder.configure({
@@ -363,7 +393,6 @@ export function useStream(
 
         configured = true;
         needKey = true;
-        console.log(`[SYNC] VideoDecoder configured at perf=${performance.now().toFixed(1)}ms`);
         drawStatus(canvas, "Decoder ready — waiting for keyframe", bytesRef.current);
       } catch (err) {
         console.error("Failed to configure VideoDecoder:", err);
@@ -371,6 +400,7 @@ export function useStream(
       }
     };
 
+    rafHandle = requestAnimationFrame(renderLoop);
     drawStatus(canvas, "Connecting to stream…");
 
     try {
@@ -378,7 +408,6 @@ export function useStream(
       websocket.binaryType = "arraybuffer";
 
       websocket.onopen = () => {
-        console.log(`[SYNC] WS opened at perf=${performance.now().toFixed(1)}ms`);
         drawStatus(canvas, "Waiting for H.264…");
         pingTimer = window.setInterval(() => {
           if (websocket?.readyState === WebSocket.OPEN) websocket.send("ping");
@@ -419,15 +448,10 @@ export function useStream(
           // Confirm the payload is really an ADTS frame (sync word 0xFFF) before decoding.
           if (data.length < 2 || data[0] !== 0xff || (data[1] & 0xf0) !== 0xf0) return;
           ensureAudioDecoder();
-          if (audioDecoder && audioDecoder.state === "configured") {
-            try {
-              audioDecoder.decode(
-                new EncodedAudioChunk({ type: "key", timestamp: ptsUs, data }),
-              );
-            } catch (err) {
-              console.error("audio decode failed:", err);
-            }
-          }
+          // Copy — the WS buffer is reused. Queue until the video clock exists,
+          // then pump near the playhead (see pumpAudio).
+          audioPacketQueue.push({ ptsUs, data: data.slice() });
+          pumpAudio();
           return;
         }
         if (msgType !== kTypeVideo) return;
@@ -436,12 +460,6 @@ export function useStream(
         if (type == null) return;
 
         const nal = stripStartCode(data);
-
-        if (debugMsgCount < 25) {
-          debugMsgCount++;
-          const hex = Array.from(nal.slice(0, 10)).map((b) => b.toString(16).padStart(2, "0")).join(" ");
-          console.log(`[NAL] #${debugMsgCount} type=${type} pts=${ptsUs} len=${nal.length} bytes=${hex}`);
-        }
 
         if (type === 7) {
           sps = nal.slice();
@@ -466,17 +484,21 @@ export function useStream(
         }
         if (ptsUs <= highestDecodedPtsUs) return;
 
-        // A P-frame this far past the last keyframe we decoded almost
-        // certainly references frames we never saw — decode would "succeed"
-        // but produce macroblocking. Bail back to waiting for a real keyframe.
-        const kMaxGopGapUs = 1_000_000;
-        if (type !== 5 && ptsUs - lastKeyframePtsUs > kMaxGopGapUs) {
+        // Detect a *timeline discontinuity* (missing NALs / stale cached keyframe
+        // jumped to live). Even one skipped reference frame causes macroblocking.
+        // ~100ms ≈ 3 frames at 30fps — tolerates jitter, rejects real gaps.
+        // (Do NOT measure against last keyframe: real GOPs are multi-second.)
+        const kMaxDecodeGapUs = 100_000;
+        if (
+          type !== 5 &&
+          highestDecodedPtsUs >= 0 &&
+          ptsUs - highestDecodedPtsUs > kMaxDecodeGapUs
+        ) {
           needKey = true;
           return;
         }
         if (type === 5) {
           needKey = false;
-          lastKeyframePtsUs = ptsUs;
         }
 
         try {
@@ -486,10 +508,6 @@ export function useStream(
             timestamp: ptsUs,
             data: toLengthPrefixed(nal),
           });
-          if (debugDecodeCount < 10) {
-            debugDecodeCount++;
-            console.log(`[NAL] decode() call #${debugDecodeCount}: type=${type === 5 ? "key" : "delta"} pts=${ptsUs} len=${nal.length} decodeQueueSize=${decoder.decodeQueueSize}`);
-          }
           decoder.decode(chunk);
           highestDecodedPtsUs = ptsUs;
         } catch (err) {
@@ -513,6 +531,7 @@ export function useStream(
       websocket?.close();
       closeDecoder();
       closeAudioDecoder();
+      audioPacketQueue.length = 0;
       try {
         audioCtx?.close();
       } catch {
