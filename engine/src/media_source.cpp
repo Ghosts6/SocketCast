@@ -5,6 +5,7 @@
 #include <cstring>
 #include <fstream>
 #include <algorithm>
+#include <string>
 #include <thread>
 
 namespace socketcast {
@@ -75,9 +76,20 @@ bool MediaSource::load_via_ffmpeg() {
     // No -tune zerolatency: it enables x264 sliced-threads, splitting each
     // picture into multiple VCL NALs — but this class assumes one NAL is one
     // picture (pts, per-NAL flushing), so slicing corrupted pts and images.
+    //
+    // -r forces CFR at fps_, matching the pts math below (pts = frame_index_
+    // * 1e6/fps_). Without it, ffmpeg keeps the source's native rate, which
+    // silently desyncs pts from real time whenever they differ (e.g. a 25fps
+    // source assumed to be 30fps plays ~20% too fast).
+    //
+    // -g/-keyint_min: shorter GOPs so a lost P-frame (or late-joiner wait)
+    // recovers in ~2s instead of x264's default ~8s.
     const std::string cmd =
         "ffmpeg -loglevel error -y -i \"" + path_ +
-        "\" -an -c:v libx264 -preset ultrafast -f h264 pipe:1";
+        "\" -an -r " + std::to_string(fps_) +
+        " -c:v libx264 -preset ultrafast -g " + std::to_string(fps_ * 2) +
+        " -keyint_min " + std::to_string(fps_) +
+        " -f h264 pipe:1";
     FILE* pipe = popen(cmd.c_str(), "r");
     if (pipe == nullptr) {
         return false;

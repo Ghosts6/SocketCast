@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef } from "react";
 import { useTheme } from "../contexts/ThemeContext";
 
 interface Particle {
@@ -21,8 +21,6 @@ export function ParticleBackground() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const mouseRef = useRef({ x: 0, y: 0 });
   const particlesRef = useRef<Particle[]>([]);
-  const [fps, setFps] = useState(0);
-  const frameCountRef = useRef(0);
   const lastTimeRef = useRef(Date.now());
   const { theme } = useTheme();
 
@@ -112,14 +110,7 @@ export function ParticleBackground() {
       const delta = now - lastTimeRef.current;
 
       if (delta >= 16) {
-        frameCountRef.current++;
-        if (delta >= 1000) {
-          setFps(frameCountRef.current);
-          frameCountRef.current = 0;
-          lastTimeRef.current = now;
-        } else {
-          lastTimeRef.current += 16;
-        }
+        lastTimeRef.current = now;
 
         // Background gradient based on theme
         const isDark = theme === "dark";
@@ -186,12 +177,6 @@ export function ParticleBackground() {
             }
           });
         });
-
-        // FPS counter
-        ctx.globalAlpha = 1;
-        ctx.fillStyle = isDark ? "rgba(107, 114, 128, 0.6)" : "rgba(107, 114, 128, 0.4)";
-        ctx.font = "12px monospace";
-        ctx.fillText(`FPS: ${fps}`, 12, 24);
       }
 
       animationFrameId = requestAnimationFrame(animate);
@@ -204,7 +189,6 @@ export function ParticleBackground() {
       window.removeEventListener("resize", resizeCanvas);
       window.removeEventListener("mousemove", handleMouseMove);
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [theme]);
 
   return (

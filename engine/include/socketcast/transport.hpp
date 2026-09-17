@@ -7,6 +7,7 @@
 #include "socketcast/session.hpp"
 
 #include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <functional>
 #include <map>
@@ -88,6 +89,11 @@ private:
     std::mutex param_sets_mutex_;
     std::vector<uint8_t> cached_sps_;
     std::vector<uint8_t> cached_pps_;
+    // Last keyframe, resent on a timer (not every poll — it's tens of KB)
+    // so a late joiner doesn't wait a full GOP for anything decodable.
+    std::vector<uint8_t> cached_keyframe_;
+    uint64_t cached_keyframe_ts_us_{0};
+    std::chrono::steady_clock::time_point last_keyframe_resend_{};
 
     // Frame accumulation: flush when a new Annex B start code begins a NAL
     std::vector<uint8_t> frame_accumulator_;

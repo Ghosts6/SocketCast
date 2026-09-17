@@ -33,7 +33,7 @@ services:
       - "5001:5001/tcp"
       - "9100:9100"
     volumes:
-      - ./Doc/dev:/media:ro
+      - ./Resource/media:/media:ro
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:5001/admin/health"]
       interval: 10s
