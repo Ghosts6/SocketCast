@@ -1,7 +1,6 @@
 # SocketCast API Reference
 
-**Status:** Phases 1–3 implemented (C++ core). Phase 4+ (native client) in progress.  
-**Note:** FastAPI control plane (Phase 5) will be documented here when complete.
+**Status:** Complete — C++ engine, native client, and FastAPI control plane are all implemented.
 
 ---
 
@@ -11,7 +10,7 @@
 2. [C++ Engine API](#c-engine-api)
 3. [Native Client API](#native-client-api)
 4. [CLI Tools](#cli-tools)
-5. [FastAPI Control Plane](#fastapi-control-plane-phase-5)
+5. [FastAPI Control Plane](#fastapi-control-plane)
 
 ---
 
@@ -19,11 +18,9 @@
 
 SocketCast has three API surfaces:
 
-1. **C++ Core** (Phases 1–3) — Transport, session, rate control, media
-2. **Native Client** (Phase 4) — Playback via SDL2 or headless
-3. **FastAPI** (Phase 5) — Session management, WebSocket bridge, metrics
-
-This document covers C++ and native client. FastAPI will be added in Phase 5.
+1. **C++ Core** — Transport, session, rate control, media
+2. **Native Client** — Playback via SDL2 or headless
+3. **FastAPI** — Session management, engine admin proxy, WebSocket bridge, metrics
 
 ---
 
@@ -44,15 +41,15 @@ public:
   Transport(std::string bind_address, uint16_t port);
   ~Transport();
 
-  // Configure for dummy send (Phase 1)
+  // Configure for dummy send
   void configure_send(const std::string& peer_host, uint16_t peer_port,
                       uint32_t packet_count, uint16_t payload_size);
 
-  // Configure for media streaming (Phase 3)
+  // Configure for media streaming
   void configure_stream(const std::string& peer_host, uint16_t peer_port,
                         const std::string& input_path, uint32_t fps = 30);
 
-  // Configure for receiving (Phase 3)
+  // Configure for receiving
   void configure_receive(const std::string& output_path);
 
   // Set callback for received packets
@@ -151,8 +148,8 @@ public:
     uint64_t acked{0};
     uint64_t retransmits{0};
     uint64_t nacks_sent{0};
-    uint64_t deadline_drops{0};       // Phase 3+
-    uint64_t media_bytes_received{0}; // Phase 3+
+    uint64_t deadline_drops{0};
+    uint64_t media_bytes_received{0};
   };
 
   // Constructor
@@ -165,10 +162,10 @@ public:
   bool failed() const;
   bool is_complete() const;
 
-  // Phase 1: Dummy send
+  // Dummy send
   void set_dummy_send(uint32_t count, uint16_t payload_size);
 
-  // Phase 3: Media streaming
+  // Media streaming
   void set_media_send(std::unique_ptr<MediaSource> source);
   void set_media_receive(std::unique_ptr<MediaSink> sink);
 
@@ -444,10 +441,10 @@ return ret;
 # Listen (receiver mode)
 ./socketcast_engine listen [--bind ADDRESS] [--port PORT] [--output FILE.h264]
 
-# Send (dummy sender, Phase 1)
+# Send (dummy sender)
 ./socketcast_engine send --host HOST --port PORT [--count N] [--size BYTES]
 
-# Stream (media sender, Phase 3+)
+# Stream (media sender)
 ./socketcast_engine stream --host HOST --port PORT --input FILE [--fps N]
 ```
 
@@ -482,18 +479,50 @@ return ret;
 
 ---
 
-## FastAPI Control Plane (Phase 5)
+## FastAPI Control Plane
 
-**Status:** Not yet implemented. Placeholder for future API.
+Python service (`control-plane/`) that manages sessions, proxies engine admin commands, and bridges video/audio to the browser over WebSocket. Session and metrics state is Redis-backed (1hr TTL); CORS is open for all origins.
 
-Phase 5 will add Python FastAPI endpoints for:
+### Sessions — `/api/sessions`
 
-- **Session management** — create/list/delete sessions
-- **Metrics** — query bitrate, loss, RTT, jitter for a session
-- **WebSocket bridge** — proxy video frames to web browsers
-- **Rate limiting** — Redis-backed token bucket for per-session rate limits
+| Method | Path | Purpose |
+|--------|------|---------|
+| GET | `/api/sessions/` | List all active sessions |
+| POST | `/api/sessions/` | Create a session (`{server, port}`) — returns a `session_id` and assigns a `stream_id` |
+| GET | `/api/sessions/{session_id}` | Get one session |
+| PUT | `/api/sessions/{session_id}` | Update session state (`handshaking`/`connected`/`disconnected`) |
+| DELETE | `/api/sessions/{session_id}` | Delete a session and its metrics |
 
-Endpoints TBD.
+### Metrics — `/api/metrics`
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| GET | `/api/metrics/{session_id}` | Read stored metrics (bitrate, loss, RTT, jitter) for a session |
+| POST | `/api/metrics/{session_id}` | Publish metrics for a session (used by `scripts/publish_metrics.py`) |
+
+### Admin (engine proxy) — `/api/admin`
+
+Proxies to the C++ engine's own HTTP admin server (`engine_host:engine_control_port`).
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| POST | `/api/admin/streams` | Start a stream on the engine (`{input, host, port, fps}`) — returns `stream_id`. Long timeout (60s): the engine may transcode via ffmpeg synchronously before responding |
+| DELETE | `/api/admin/streams/{stream_id}` | Stop a stream on the engine |
+| GET | `/api/admin/streams/{stream_id}/stats` | Get stats for a running stream |
+
+### WebSocket bridge
+
+| Path | Purpose |
+|------|---------|
+| `/ws/metrics/{session_id}` | Streams metrics once per second (zeros if no data yet) |
+| `/ws/stream/{session_id}` | Streams binary video/audio frames: `[1 byte type][8 bytes pts_us big-endian][payload]`, type `0x00`=video (Annex B H.264), `0x01`=audio (ADTS) |
+
+### Observability
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| GET | `/healthz` | Health check — 503 if Redis is unreachable |
+| GET | `/metrics` | Prometheus metrics in exposition format |
 
 ---
 
@@ -504,5 +533,5 @@ Endpoints TBD.
 | 2026-08-24 | 1.0 | Transport, Packet, Session, RTO | Complete |
 | 2026-08-25 | 1.0 | RateController, JitterBuffer | Complete |
 | 2026-08-27 | 1.0 | MediaSource, MediaSink, NAL parsing | Complete |
-| 2026-08-29 | 1.0 | PlaybackClient (native) | MVP complete |
-| TBD | 2.0 | FastAPI, WebSocket, Redis | Not started |
+| 2026-08-29 | 1.0 | PlaybackClient (native) | Complete |
+| 2026-09 | 2.0 | FastAPI, WebSocket bridge, Redis, engine admin API | Complete |

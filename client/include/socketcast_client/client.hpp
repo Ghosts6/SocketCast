@@ -1,5 +1,5 @@
 #pragma once
-// SocketCast native playback client (Phase 4).
+// SocketCast native playback client.
 // Speaks the protocol directly, receives H.264 frames, renders via SDL2.
 
 #include "socketcast/packet.hpp"

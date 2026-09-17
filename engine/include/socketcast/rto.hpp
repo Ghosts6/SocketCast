@@ -10,7 +10,7 @@ public:
     void onRttSample(std::chrono::microseconds sample);
     std::chrono::microseconds currentRto() const;
 
-    // Phase 5b: expose RTT and jitter for metrics
+    // Exposes RTT and jitter for metrics
     double currentRttMs() const;
     double currentJitterMs() const;
 

@@ -142,6 +142,10 @@ export function useStream(
     let renderAnchorPtsMs: number | null = null;
     let rafHandle: number | null = null;
     const kMaxQueuedFrames = 60;
+    // Watchdog: force-draw the front frame if nothing's painted in this long,
+    // rather than trusting the pts schedule below.
+    let lastDrawPerfMs: number | null = performance.now();
+    const kMaxStallMs = 1500;
 
     // Engine/bridge bulk-drains the whole AudioBuffer on first poll — keep
     // encoded packets and only decode/schedule near the video playhead so we
@@ -149,6 +153,9 @@ export function useStream(
     const audioPacketQueue: { ptsUs: number; data: Uint8Array }[] = [];
     const kAudioScheduleAheadSec = 0.75;
     const kAudioLateSlackSec = 0.05;
+    // Must hold a whole clip until the video clock exists and pumpAudio can
+    // trim to the playhead. A small drop-oldest cap (e.g. 100) kept only the
+    // *end* of the song while video started at pts≈0 → permanent silence.
 
     const drawFrame = (frame: VideoFrame) => {
       if (canvasRef.current) {
@@ -159,6 +166,7 @@ export function useStream(
         frameCountRef.current += 1;
       }
       frame.close();
+      lastDrawPerfMs = performance.now();
     };
 
     const videoMediaSec = (): number | null => {
@@ -238,48 +246,69 @@ export function useStream(
 
     const renderLoop = () => {
       if (cancelled) return;
-      const nowMs = performance.now();
+      // A throw here must not kill the rAF chain — that was the freeze bug:
+      // one bad tick, then the canvas never updates again.
+      try {
+        const nowMs = performance.now();
 
-      if (renderAnchorPerfMs == null && renderQueue.length > 0) {
-        renderAnchorPerfMs = nowMs;
-        renderAnchorPtsMs = renderQueue[0].timestamp / 1000;
-      }
-
-      while (renderQueue.length > kMaxQueuedFrames) {
-        renderQueue.shift()!.close();
-      }
-
-      while (renderQueue.length > 0) {
-        const framePtsMs = renderQueue[0].timestamp / 1000;
-        let dueAt = renderAnchorPerfMs! + (framePtsMs - renderAnchorPtsMs!);
-
-        // A pts far ahead of schedule (e.g. jumping from a resent stale
-        // keyframe to the live buffer's position) would idle out the gap —
-        // resync to "now" instead, the gap was never real playback time.
-        const kMaxScheduleAheadMs = 1000;
-        if (dueAt > nowMs + kMaxScheduleAheadMs) {
+        if (renderAnchorPerfMs == null && renderQueue.length > 0) {
           renderAnchorPerfMs = nowMs;
-          renderAnchorPtsMs = framePtsMs;
-          dueAt = nowMs;
+          renderAnchorPtsMs = renderQueue[0].timestamp / 1000;
         }
 
-        if (nowMs < dueAt) break;
+        while (renderQueue.length > kMaxQueuedFrames) {
+          renderQueue.shift()!.close();
+        }
 
-        const frame = renderQueue.shift()!;
-        // Drop instead of paint if a newer frame is also due — avoids a
-        // fast-forward blur of instantly-drawn frames after any hiccup.
-        if (renderQueue.length > 0) {
-          const nextPtsMs = renderQueue[0].timestamp / 1000;
-          if (renderAnchorPerfMs! + (nextPtsMs - renderAnchorPtsMs!) <= nowMs) {
-            frame.close();
-            continue;
+        // Stalled past kMaxStallMs — stop trusting the anchor/pts math,
+        // force-draw the front frame and resync.
+        if (
+          renderQueue.length > 0 &&
+          lastDrawPerfMs != null &&
+          nowMs - lastDrawPerfMs > kMaxStallMs
+        ) {
+          const frame = renderQueue.shift()!;
+          renderAnchorPerfMs = nowMs;
+          renderAnchorPtsMs = frame.timestamp / 1000;
+          drawFrame(frame);
+        }
+
+        while (renderQueue.length > 0) {
+          const framePtsMs = renderQueue[0].timestamp / 1000;
+          let dueAt = renderAnchorPerfMs! + (framePtsMs - renderAnchorPtsMs!);
+
+          // A pts far ahead of schedule (e.g. a resent stale keyframe jumping
+          // to the live position) would idle out a gap that was never real playback time.
+          const kMaxScheduleAheadMs = 1000;
+          if (dueAt > nowMs + kMaxScheduleAheadMs) {
+            renderAnchorPerfMs = nowMs;
+            renderAnchorPtsMs = framePtsMs;
+            dueAt = nowMs;
           }
-        }
-        drawFrame(frame);
-      }
 
-      pumpAudio();
-      rafHandle = requestAnimationFrame(renderLoop);
+          if (nowMs < dueAt) break;
+
+          const frame = renderQueue.shift()!;
+          // Drop instead of paint if a newer frame is also due — avoids a
+          // fast-forward blur of instantly-drawn frames after any hiccup.
+          if (renderQueue.length > 0) {
+            const nextPtsMs = renderQueue[0].timestamp / 1000;
+            if (renderAnchorPerfMs! + (nextPtsMs - renderAnchorPtsMs!) <= nowMs) {
+              frame.close();
+              continue;
+            }
+          }
+          drawFrame(frame);
+        }
+
+        pumpAudio();
+      } catch (err) {
+        console.error("renderLoop error (recovering, not stalling):", err);
+      } finally {
+        if (!cancelled) {
+          rafHandle = requestAnimationFrame(renderLoop);
+        }
+      }
     };
 
     const closeDecoder = () => {
@@ -297,6 +326,7 @@ export function useStream(
       }
       renderAnchorPerfMs = null;
       renderAnchorPtsMs = null;
+      lastDrawPerfMs = performance.now();
     };
 
     const closeAudioDecoder = () => {

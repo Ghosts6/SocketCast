@@ -1,5 +1,5 @@
 #pragma once
-// H.264 Annex B NAL unit parsing and frame classification (Phase 3).
+// H.264 Annex B NAL unit parsing and frame classification.
 
 #include "socketcast/packet.hpp"
 

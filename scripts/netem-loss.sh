@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Inject packet loss/latency on the loopback interface to exercise the
-# protocol's retransmission/recovery logic (Phase 2).
+# protocol's retransmission/recovery logic.
 #
 # Usage: sudo ./netem-loss.sh [loss_pct] [delay_ms]
 set -euo pipefail

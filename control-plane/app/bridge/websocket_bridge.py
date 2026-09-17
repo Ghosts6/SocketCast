@@ -175,6 +175,10 @@ async def stream_bridge(websocket: WebSocket, session_id: str):
         engine_admin_url = f"http://{settings.engine_host}:{settings.engine_control_port}"
         last_heartbeat = 0.0
         frame_count = 0
+        # Audio is a one-shot snapshot at stream start (engine peeks the same
+        # buffer every poll). Forward it once per WS connection so reconnects
+        # still hear audio without re-blasting the whole clip every 50ms.
+        audio_sent = False
 
         async with httpx.AsyncClient(timeout=2.0) as client:
             while True:
@@ -199,13 +203,14 @@ async def stream_bridge(websocket: WebSocket, session_id: str):
                     prometheus_metrics.engine_connection_errors.inc()
                     frames_data = None
 
-                try:
-                    resp = await client.get(f"{engine_admin_url}/admin/audio", timeout=1.0)
-                    if resp.status_code == 200:
-                        audio_data = resp.json()
-                except Exception:
-                    prometheus_metrics.engine_connection_errors.inc()
-                    audio_data = None
+                if not audio_sent:
+                    try:
+                        resp = await client.get(f"{engine_admin_url}/admin/audio", timeout=1.0)
+                        if resp.status_code == 200:
+                            audio_data = resp.json()
+                    except Exception:
+                        prometheus_metrics.engine_connection_errors.inc()
+                        audio_data = None
 
                 frames = (frames_data or {}).get("frames") or []
                 audio_frames = (audio_data or {}).get("audio") or []
@@ -225,20 +230,22 @@ async def stream_bridge(websocket: WebSocket, session_id: str):
                                 frame_count += 1
                         except Exception:
                             continue
-                    for audio_frame in audio_frames:
-                        b64 = audio_frame.get("data_base64") or ""
-                        if not b64:
-                            continue
-                        try:
-                            raw = base64.b64decode(b64)
-                            if raw:
-                                # type 1 = audio
-                                pts_us = int(audio_frame.get("pts_us") or 0)
-                                header = b"\x01" + pts_us.to_bytes(8, "big")
-                                await websocket.send_bytes(header + raw)
-                                prometheus_metrics.audio_frames_received.inc()
-                        except Exception:
-                            continue
+                    if audio_frames and not audio_sent:
+                        for audio_frame in audio_frames:
+                            b64 = audio_frame.get("data_base64") or ""
+                            if not b64:
+                                continue
+                            try:
+                                raw = base64.b64decode(b64)
+                                if raw:
+                                    # type 1 = audio
+                                    pts_us = int(audio_frame.get("pts_us") or 0)
+                                    header = b"\x01" + pts_us.to_bytes(8, "big")
+                                    await websocket.send_bytes(header + raw)
+                                    prometheus_metrics.audio_frames_received.inc()
+                            except Exception:
+                                continue
+                        audio_sent = True
                     last_heartbeat = asyncio.get_event_loop().time()
                 else:
                     # Send heartbeat if no frames

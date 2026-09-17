@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Two-process Phase 1 check: listen + send dummy DATA over UDP.
+# Two-process loopback check: listen + send dummy DATA over UDP.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 BIN="${ROOT}/engine/build/socketcast_engine"

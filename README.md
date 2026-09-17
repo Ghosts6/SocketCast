@@ -7,8 +7,6 @@
 ![Docker](https://img.shields.io/badge/Docker-Kubernetes-2496ED.svg)
 ![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)
 
-> **Status:** 🧪 Final testing & hardening before deploy — Phases 0–6 complete and committed: protocol, transport, rate control, media integration, native client, Python control plane, and a live web dashboard streaming real H.264 video + AAC audio end-to-end over the custom UDP protocol. Phase 7 (observability) is mostly done — Prometheus/Grafana are live, engine-side metrics are the remaining gap. Phase 8 (DTLS, io_uring, fuzzing, Kubernetes) is what's left before a production deploy.
-
 A custom reliable-UDP transport protocol designed and built from scratch for real-time video streaming.
 
 Unlike streaming projects that wrap an existing transport (WebRTC, gStreamer, plain TCP), this project implements the transport layer itself: custom packet structures, selective-repeat ARQ, deadline-based retransmission, and congestion-aware rate control, purpose-built to prioritize media delivery under lossy, volatile network conditions.
@@ -20,70 +18,77 @@ Decoupled layers separate the high-performance network I/O from the control plan
 ```mermaid
 graph TD
     subgraph WebPlane ["🌐 Web Plane - Browser"]
-        UI["React / TypeScript / Tailwind<br/>(control + canvas video)"]
+        UI["React / TypeScript / Tailwind<br/>canvas video + Web Audio playback"]
     end
 
     subgraph ControlPlane ["🐍 Python Control Plane"]
-        API["FastAPI Service<br/>(session mgmt, metrics)"]
-        Bridge["WebSocket Bridge<br/>(frame proxy)"]
-        Redis["[(Redis)]<br/>session state<br/>rate limits"]
-        API <-->|gRPC/IPC| Redis
+        API["FastAPI<br/>sessions · metrics · admin proxy"]
+        Bridge["WebSocket Bridge<br/>polls engine, forwards binary frames"]
+        Redis[("Redis<br/>session state")]
+        API <--> Redis
     end
 
     subgraph TransportEngine ["⚡ C++ Core Engine"]
+        Admin["Admin HTTP Server :5001<br/>thread-per-connection"]
+        Buffers["Frame + Audio Buffers<br/>Annex B / ADTS framing"]
+
         subgraph RxPath ["Receive Path"]
-            UDP["Raw UDP Sockets<br/>(epoll loop)"]
-            Jitter["Jitter Buffer<br/>(adaptive depth,<br/>underrun/overrun)"]
-            ARQ_RX["Reorder Buffer<br/>(in-order delivery)"]
-        end
-        
-        subgraph TxPath ["Send Path"]
-            Window["Send Window<br/>(seq tracking)"]
-            Rate["Rate Controller<br/>(token bucket,<br/>RTT-trend backoff)"]
-            RTO["Dynamic RTO<br/>(Jacobson + RTTVAR)"]
+            UDPrx["Raw UDP Sockets<br/>epoll loop"]
+            JitterBuf["Jitter Buffer<br/>adaptive depth"]
+            Reorder["Reorder Buffer<br/>in-order delivery"]
         end
 
-        UDP --> Jitter --> ARQ_RX
+        subgraph TxPath ["Send Path"]
+            Window["Send Window<br/>seq tracking"]
+            Rate["Rate Controller<br/>token bucket, RTT-trend backoff"]
+            RTO["Dynamic RTO<br/>Jacobson + RTTVAR"]
+        end
+
+        Admin --> Buffers
+        UDPrx --> JitterBuf --> Reorder
         Window --> Rate --> RTO
     end
 
-    subgraph MediaLayer ["📹 Media"]
-        FFmpeg["FFmpeg / libav<br/>(chunks + NAL parse)"]
-        Deadline["Playback Deadline<br/>(discard late packets)"]
+    subgraph MediaLayer ["📹 Media Ingest"]
+        FFmpeg["FFmpeg / libav<br/>CFR video + AAC audio extraction"]
+        Deadline["Playback Deadline<br/>discard late packets"]
     end
 
-    NativeClient["🎬 Native Client<br/>SDL2/OpenCV<br/>(speaks protocol)"]
+    NativeClient["🎬 Native Client<br/>SDL2, headless fallback<br/>speaks protocol directly"]
 
-    FFmpeg -->|real chunks| Deadline -->|prioritized packets| TransportEngine
-    TransportEngine <-->|custom UDP<br/>protocol| NativeClient
-    TransportEngine <-->|Prometheus<br/>metrics| ControlPlane
-    ControlPlane <-->|REST / WS| UI
-    Bridge <-->|frame stream| TransportEngine
+    FFmpeg -->|chunks| Deadline -->|prioritized packets| Window
+    RTO -->|custom UDP protocol| NativeClient
+    NativeClient -->|custom UDP protocol| UDPrx
+    Reorder -->|received frames| Buffers
+    Bridge -->|HTTP poll: frames, audio, stats| Admin
+    API -->|HTTP: start / stop / stats| Admin
+    ControlPlane <-->|REST + WS| UI
 ```
 
 ### Architecture Notes
 
-| Component | Purpose | Status |
-|-----------|---------|--------|
-| **Jitter Buffer** | Smooths out arrival-time variance via adaptive depth buffering | ✅ Phase 2 |
-| **Rate Controller** | Token-bucket pacing + RTT-trend congestion backoff (BBR-inspired) | ✅ Phase 2 |
-| **Dynamic RTO** | Jacobson's algorithm adapts retransmit timeout to current RTT | ✅ Phase 1 |
-| **Selective-Repeat ARQ** | NACK-based retransmission keeps data flowing without stop-and-wait | ✅ Phase 1 |
-| **Reorder Buffer** | In-order delivery despite out-of-order packet arrivals | ✅ Phase 1 |
-| **Playback Deadline** | Computes max tolerable latency; discards packets that arrive too late | ✅ Phase 3 |
-| **Real-time send pacing** | Sends media at its own source timeline instead of link-speed bursts | ✅ Phase 3 |
-| **Native Client** | Speaks the protocol directly (no browser bridge); SDL2 playback, headless fallback | ✅ Phase 4 |
-| **FastAPI Control Plane** | Session CRUD, metrics, WebSocket bridge (video+audio) to the browser, Redis-backed | ✅ Phase 5 |
-| **Admin API** (engine) | HTTP control surface for starting/stopping streams, frame/audio polling, thread-per-connection | ✅ Phase 5 |
-| **Web Dashboard** | React/TS/Tailwind UI — live canvas video (WebCodecs) + synced audio (Web Audio API), real-time metrics, dark/light theme | ✅ Phase 6 |
-| **Observability** | Prometheus metrics + pre-provisioned Grafana dashboard | ✅ Phase 7 (control plane); 🚧 engine-side metrics still pending |
-| **DTLS / io_uring / fuzzing / K8s** | Transport encryption, alternate event loop, parser fuzzing, cluster deploy | 🚧 Phase 8 |
+| Component | Purpose |
+|-----------|---------|
+| **Jitter Buffer** | Smooths out arrival-time variance via adaptive depth buffering |
+| **Rate Controller** | Token-bucket pacing + RTT-trend congestion backoff (BBR-inspired) |
+| **Dynamic RTO** | Jacobson's algorithm adapts retransmit timeout to current RTT |
+| **Selective-Repeat ARQ** | NACK-based retransmission keeps data flowing without stop-and-wait |
+| **Reorder Buffer** | In-order delivery despite out-of-order packet arrivals |
+| **Playback Deadline** | Computes max tolerable latency; discards packets that arrive too late |
+| **Real-time send pacing** | Sends media at its own source timeline instead of link-speed bursts |
+| **Native Client** | Speaks the protocol directly (no browser bridge); SDL2 playback, headless fallback |
+| **FastAPI Control Plane** | Session CRUD, metrics, WebSocket bridge (video+audio) to the browser, Redis-backed |
+| **Admin API** (engine) | HTTP control surface for starting/stopping streams, frame/audio polling, thread-per-connection |
+| **Web Dashboard** | React/TS/Tailwind UI — live canvas video (WebCodecs) + synced audio (Web Audio API), real-time metrics, dark/light theme |
+| **Observability** | Control-plane Prometheus metrics + pre-provisioned Grafana dashboard; engine-side metrics not yet exposed |
+| **Kubernetes manifests** (`deploy/k8s/`) | Namespace, deployments/services for engine/control-plane/dashboard/redis, HPA — UDP ingress/load-balancing and autoscaling on a real stream-count metric are still open |
+| **DTLS / io_uring / fuzzing** | Transport encryption, alternate event loop, packet-parser fuzz target — encryption and io_uring not implemented; libFuzzer target exists (`engine/fuzz/`) but isn't run in CI |
 
-**Key insight:** Phases 1–2 handle reliability and congestion. Phase 3 adds real media (FFmpeg chunks), deadline-aware drop logic, and real-time send pacing. Phase 4 adds the native protocol client. Phases 5–6 add the Python control plane and browser dashboard, bridged over WebSocket since browsers can't speak raw UDP. Phase 7 is partial observability; Phase 8 (security, performance, deploy hardening) is what's left before shipping.
+**Key insight:** The transport layer (reliability, congestion control) is fully decoupled from media concerns — deadline-aware drop logic and real-time send pacing sit on top of it, not inside it. The native client speaks the custom protocol directly; the browser can't open raw UDP sockets, so it's bridged through the Python control plane instead, which polls the engine's admin HTTP API and forwards frames over WebSocket.
 
 ## Core Protocol Features
 
-*(Implemented and validated end-to-end in Phases 0–2; still the foundation everything above is built on.)*
+*(Implemented and validated end-to-end; the foundation everything above is built on.)*
 
 ### 1. Deadline-Based Loss Recovery
 Not every packet is worth recovering. The protocol computes the exact time a lost packet is needed for playback; if the round trip needed for a NACK + retransmit would exceed that deadline, the packet is intentionally dropped in favor of decoder concealment, rather than retransmitting into a latency cascade.
@@ -103,7 +108,7 @@ Loss rate and RTT trend are monitored together to detect congestion *before* sev
 * **Layer 2 - Media:** FFmpeg / libav, NAL-unit parsing for frame classification, concurrent AAC audio extraction.
 * **Layer 3 - Control Plane:** Python, FastAPI, Redis, WebSocket bridge (binary video+audio frames with real PTS). C++/Python boundary is separate-process IPC (pybind11 is optional later).
 * **Layer 4 - Interface:** React, TypeScript, Tailwind CSS, WebCodecs (`VideoDecoder`/`AudioDecoder`) for canvas playback, Web Audio API for synced audio output.
-* **Layer 5 - Infrastructure:** Docker (multi-stage builds) with a full `docker-compose` stack (engine, control plane, dashboard, Redis, Prometheus, Grafana), Kubernetes (planned, Phase 8), `tc netem` for network-condition testing, libFuzzer for parser hardening (planned, Phase 8).
+* **Layer 5 - Infrastructure:** Docker (multi-stage builds) with a full `docker-compose` stack (engine, control plane, dashboard, Redis, Prometheus, Grafana); Kubernetes manifests in `deploy/k8s/` (not yet production-validated — UDP ingress/load-balancing is an open question); `tc netem` for network-condition testing; libFuzzer target for the packet parser (`engine/fuzz/`).
 
 ## Building from Source
 
@@ -179,7 +184,7 @@ Open `http://localhost:5173`, connect to `127.0.0.1:5000`, then run the script �
 
 ---
 
-The remaining scripts below are lower-level engine tests from Phases 1–4 — still valid for exercising the transport in isolation, but the Docker + `start_stream.sh` flow above is the one to reach for when demoing or verifying the full product.
+The remaining scripts below are lower-level engine tests — still valid for exercising the transport in isolation, but the Docker + `start_stream.sh` flow above is the one to reach for when demoing or verifying the full product.
 
 ### `dev-setup.sh`
 **Purpose:** Install development dependencies (CMake, build tools, optional SDL2).
@@ -190,22 +195,22 @@ The remaining scripts below are lower-level engine tests from Phases 1–4 — s
 
 ---
 
-### `phase1-loopback.sh`
+### `loopback-test.sh`
 **Purpose:** Test basic transport — send 100 dummy packets to localhost, verify ACK/NACK, measure no retransmits.
 
 ```bash
-./scripts/phase1-loopback.sh
+./scripts/loopback-test.sh
 ```
 
 **Output:** Packet sequence, ACK count, retransmit count. All 100 should be delivered with 0 retransmits on clean network.
 
 ---
 
-### `phase2-benchmark.sh`
+### `network-benchmark.sh`
 **Purpose:** Validate rate control & jitter buffer under network conditions (loss, latency, jitter) using `tc netem`.
 
 ```bash
-sudo ./scripts/phase2-benchmark.sh
+sudo ./scripts/network-benchmark.sh
 ```
 
 **Runs:** 6 test scenarios:
@@ -220,33 +225,33 @@ sudo ./scripts/phase2-benchmark.sh
 
 ---
 
-### `phase3-stream.sh`
+### `media-stream-test.sh`
 **Purpose:** End-to-end media streaming — server encodes/streams H.264, listener writes received frames to file.
 
 ```bash
-./scripts/phase3-stream.sh input.h264 [output.h264] [port]
+./scripts/media-stream-test.sh input.h264 [output.h264] [port]
 ```
 
 **Examples:**
 ```bash
-./scripts/phase3-stream.sh video.h264 received.h264 5000
-./scripts/phase3-stream.sh video.mp4                      # ffmpeg auto-encodes
+./scripts/media-stream-test.sh video.h264 received.h264 5000
+./scripts/media-stream-test.sh video.mp4                      # ffmpeg auto-encodes
 ```
 
 **Output:** Received file (Annex B H.264) if streaming succeeded.
 
 ---
 
-### `phase4-demo.sh`
+### `native-client-demo.sh`
 **Purpose:** Native client playback demo — stream from engine, client receives and displays.
 
 ```bash
-./scripts/phase4-demo.sh input.h264 [port]
+./scripts/native-client-demo.sh input.h264 [port]
 ```
 
 **Examples:**
 ```bash
-./scripts/phase4-demo.sh video.h264 5000
+./scripts/native-client-demo.sh video.h264 5000
 ```
 
 **Output:** Client statistics (packets received, bitrate, frame count). With SDL2: video rendered in window.
@@ -308,6 +313,10 @@ Example:
 - **[Protocol Specification](Doc/protocol.md)** — Detailed v1 protocol: packet format, handshake, error recovery, rate control, jitter buffer, deadline-based drop logic, examples
 - **[API Reference](Doc/api.md)** — C++ Engine API (Transport, Packet, Session, RateController, JitterBuffer, MediaSource/Sink) + Native Client API + CLI tools; FastAPI control-plane API
 - **[Observability](Doc/OBSERVABILITY.md)** — Prometheus metrics surface, Grafana dashboard, structured logging
+
+## Demo
+
+**coming soon**
 
 ## License
 

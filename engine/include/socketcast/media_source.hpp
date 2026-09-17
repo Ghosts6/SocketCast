@@ -1,5 +1,5 @@
 #pragma once
-// Read H.264 Annex B (file or ffmpeg pipe) and produce transport chunks (Phase 3).
+// Read H.264 Annex B (file or ffmpeg pipe) and produce transport chunks.
 
 #include "socketcast/nal_parser.hpp"
 

@@ -1,7 +1,7 @@
 # SocketCast Protocol (v1) - Detailed Specification
 
 **Version:** 1 (Frozen)  
-**Status:** Phases 0–2 complete; Phases 3–4 in progress  
+**Status:** Complete  
 **Date:** August 2026
 
 ---
@@ -57,25 +57,25 @@ Bytes  32+   payload         Variable length (up to 1200 bytes)
 
 ### Packet Types
 
-| Type | Name | Phase | Purpose |
-|------|------|-------|---------|
-| 0 | DATA | 1 | Media payload |
-| 1 | ACK | 1 | Positive acknowledgment (packet received) |
-| 2 | NACK | 1 | Negative acknowledgment (retransmit request) |
-| 3 | RECEIVER_REPORT | 2+ | Statistics report (future) |
-| 4 | KEEPALIVE | 2+ | Keep-alive probe (future) |
-| 5 | HANDSHAKE | 1 | Session setup/teardown (SYN/ACK/FIN) |
+| Type | Name | Purpose |
+|------|------|---------|
+| 0 | DATA | Media payload |
+| 1 | ACK | Positive acknowledgment (packet received) |
+| 2 | NACK | Negative acknowledgment (retransmit request) |
+| 3 | RECEIVER_REPORT | Statistics report (future) |
+| 4 | KEEPALIVE | Keep-alive probe (future) |
+| 5 | HANDSHAKE | Session setup/teardown (SYN/ACK/FIN) |
 
 ### Frame Types (Priority Hierarchy)
 
-| Type | Priority | Phase | Description |
-|------|----------|-------|-------------|
-| 0 | High | 3 | Keyframe (I-frame, full frame data) |
-| 1 | Medium | 3 | P-frame (predicted frame, delta only) |
-| 2 | High | 3 | Audio (same priority as keyframe) |
-| 3 | None | 1 | Control (handshake, dummy, no media) |
+| Type | Priority | Description |
+|------|----------|-------------|
+| 0 | High | Keyframe (I-frame, full frame data) |
+| 1 | Medium | P-frame (predicted frame, delta only) |
+| 2 | High | Audio (same priority as keyframe) |
+| 3 | None | Control (handshake, dummy, no media) |
 
-**Phase 1–2 use CONTROL only.** Phase 3+ classifies media via NAL parsing.
+Media frame types are classified via NAL parsing; non-media traffic (handshake, dummy) always uses CONTROL.
 
 ### Flags (Handshake Only)
 
@@ -410,7 +410,7 @@ t=20s 60ms       0%          945kbps   (recovering, slow-start +5%)
 
 - **RFC 6298:** Computing TCP's Retransmission Timer (Jacobson's RTO)
 - **BBR Congestion Control:** (Google's BBR algorithm inspired this design)
-- **H.264 Annex B:** NAL unit stream format for media frames (Phase 3+)
+- **H.264 Annex B:** NAL unit stream format for media frames
 
 ---
 
@@ -418,5 +418,5 @@ t=20s 60ms       0%          945kbps   (recovering, slow-start +5%)
 
 | Date | Version | Changes |
 |------|---------|---------|
-| 2026-08-24 | 1 | Protocol frozen for Phases 0–2 |
-| 2026-08-27 | 1 | Phases 3–4 (media, native client) in progress |
+| 2026-08-24 | 1 | Core transport protocol frozen |
+| 2026-08-27 | 1 | Media streaming and native client added |

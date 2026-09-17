@@ -554,7 +554,10 @@ std::string Transport::on_get_frames() {
 }
 
 std::string Transport::on_get_audio() {
-    auto frames = audio_buffer_->get_all_frames();
+    // Peek, don't drain: audio is bulk-loaded once at stream start. Draining
+    // on the first /admin/audio poll permanently silenced every later viewer
+    // (and any reconnect). The bridge sends the snapshot once per WS session.
+    auto frames = audio_buffer_->peek_all_frames();
     std::ostringstream oss;
     oss << R"({"audio":[)";
     bool first = true;

@@ -3,7 +3,7 @@
 #include <iostream>
 #include <stdexcept>
 
-// Native playback client (Phase 4).
+// Native playback client.
 // Speaks the SocketCast protocol directly, receives H.264 frames, renders via SDL2.
 //
 // NOTE: intentionally no Dockerfile for this component — it's a GUI app

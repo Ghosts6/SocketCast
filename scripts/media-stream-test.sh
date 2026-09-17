@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Phase 3: stream H.264 through SocketCast and write received Annex B to a file.
+# Stream H.264 through SocketCast and write received Annex B to a file.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 BIN="${ROOT}/engine/build/socketcast_engine"
@@ -29,8 +29,8 @@ kill -INT "$LISTEN_PID" 2>/dev/null || true
 wait "$LISTEN_PID" 2>/dev/null || true
 
 if [[ -s "$OUT" ]]; then
-  echo "Phase 3 ok: wrote $(wc -c < "$OUT") bytes to $OUT"
+  echo "OK: wrote $(wc -c < "$OUT") bytes to $OUT"
 else
-  echo "Phase 3 failed: no output at $OUT"
+  echo "Failed: no output at $OUT"
   exit 1
 fi

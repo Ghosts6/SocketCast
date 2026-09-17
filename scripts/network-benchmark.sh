@@ -1,5 +1,5 @@
 #!/bin/bash
-# Phase 2 benchmark: test selective-repeat, jitter buffer, and rate control
+# Network benchmark: test selective-repeat, jitter buffer, and rate control
 # under induced packet loss, latency, and jitter using tc netem.
 # Requires root for tc commands.
 
@@ -41,7 +41,7 @@ declare -a NETEM_CMDS=(
     "delay 50ms 10ms loss 5%"
 )
 
-echo "=== SocketCast Phase 2 Benchmark ==="
+echo "=== SocketCast Network Benchmark ==="
 echo "Testing reliability, rate control, and jitter buffering"
 echo ""
 
@@ -65,7 +65,7 @@ for i in "${!CONDITIONS[@]}"; do
 
     # Run the loopback test
     echo "  Running loopback test..."
-    timeout 30 bash scripts/phase1-loopback.sh > /tmp/phase2_test_$i.log 2>&1 || {
+    timeout 30 bash scripts/loopback-test.sh > /tmp/netbench_test_$i.log 2>&1 || {
         ret=$?
         if [ $ret -eq 124 ]; then
             echo "  Test timed out (might indicate congestion)"
@@ -75,9 +75,9 @@ for i in "${!CONDITIONS[@]}"; do
     }
 
     # Parse results
-    if [ -f /tmp/phase2_test_$i.log ]; then
-        acked=$(grep -oP '(?<=acked: )\d+' /tmp/phase2_test_$i.log | tail -1)
-        retrans=$(grep -oP '(?<=retransmits: )\d+' /tmp/phase2_test_$i.log | tail -1)
+    if [ -f /tmp/netbench_test_$i.log ]; then
+        acked=$(grep -oP '(?<=acked: )\d+' /tmp/netbench_test_$i.log | tail -1)
+        retrans=$(grep -oP '(?<=retransmits: )\d+' /tmp/netbench_test_$i.log | tail -1)
 
         if [ -n "$acked" ] && [ -n "$retrans" ]; then
             echo "  Results: acked=$acked, retransmits=$retrans"
@@ -93,4 +93,4 @@ for i in "${!CONDITIONS[@]}"; do
 done
 
 echo "=== Benchmark Complete ==="
-echo "Test logs saved in /tmp/phase2_test_*.log"
+echo "Test logs saved in /tmp/netbench_test_*.log"

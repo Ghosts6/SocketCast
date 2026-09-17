@@ -33,7 +33,7 @@ PlaybackClient::~PlaybackClient() {
 bool PlaybackClient::connect() {
     try {
         // Bind to local address for receiving. Transport handles both listen and send.
-        // For Phase 4, we'll use dynamic ephemeral port.
+        // Uses a dynamic ephemeral port.
         transport_ = std::make_unique<Transport>("0.0.0.0", 0);
         state_ = ClientState::Connecting;
 
@@ -142,10 +142,10 @@ void PlaybackClient::on_packet(const Packet& pkt) {
             std::chrono::steady_clock::now().time_since_epoch())
             .count();
 
-    // Accumulate frame data (Phase 4 MVP: simple concatenation)
+    // Accumulate frame data (simple concatenation for now)
     incoming_frame_.insert(incoming_frame_.end(), pkt.payload.begin(), pkt.payload.end());
 
-    // TODO(Phase 4+): NAL-aware frame boundary detection
+    // TODO: NAL-aware frame boundary detection
     // For now, treat each packet as part of the frame
 }
 
@@ -160,7 +160,7 @@ void PlaybackClient::render_frame(const std::vector<uint8_t>& data) {
     }
 
     // TODO: Decode H.264 -> YUV420, then UpdateTexture
-    // For Phase 4 MVP, just update renderer with dummy data
+    // For now, just update renderer with dummy data
     SDL_SetRenderDrawColor(sdl_->renderer, 0, 0, 0, SDL_ALPHA_OPAQUE);
     SDL_RenderClear(sdl_->renderer);
     SDL_RenderPresent(sdl_->renderer);
@@ -212,7 +212,8 @@ int PlaybackClient::run() {
             }
         }
 
-        // Simulate frame rendering (TODO: integrate with actual socket I/O)
+        // incoming_frame_ is filled by the real rx callback (see connect());
+        // render_frame() itself doesn't decode H.264 yet, see its own TODO.
         if (!incoming_frame_.empty()) {
             render_frame(incoming_frame_);
             incoming_frame_.clear();
@@ -232,7 +233,7 @@ int PlaybackClient::run() {
     }
 #else
     while (running && is_connected()) {
-        // Phase 5b: count frames in headless build too
+        // Count frames in headless build too
         // Simulate frame processing by counting chunks as frames
         static auto last_frame_check = std::chrono::steady_clock::now();
         auto now = std::chrono::steady_clock::now();

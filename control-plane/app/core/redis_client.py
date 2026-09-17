@@ -1,4 +1,4 @@
-"""Shared Redis client for session state and rate-limit counters."""
+"""Shared Redis client for session and metrics state."""
 import redis.asyncio as redis
 
 from app.core.config import settings

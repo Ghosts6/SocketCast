@@ -31,6 +31,11 @@ std::vector<std::shared_ptr<AudioFrame>> AudioBuffer::get_all_frames() {
     return result;
 }
 
+std::vector<std::shared_ptr<AudioFrame>> AudioBuffer::peek_all_frames() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return std::vector<std::shared_ptr<AudioFrame>>(buffer_.begin(), buffer_.end());
+}
+
 size_t AudioBuffer::size() const {
     std::lock_guard<std::mutex> lock(mutex_);
     return buffer_.size();

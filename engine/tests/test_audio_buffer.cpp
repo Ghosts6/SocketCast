@@ -49,6 +49,19 @@ int main() {
         require(buf.size() == 0, "size is zero after drain");
     }
 
+    {
+        // peek_all_frames is non-destructive — late joiners need this.
+        AudioBuffer buf(4);
+        buf.push_frame({0xAA}, 0, 48000, 2);
+        buf.push_frame({0xBB}, 1000, 48000, 2);
+        auto a = buf.peek_all_frames();
+        auto b = buf.peek_all_frames();
+        require(a.size() == 2, "peek returns all frames");
+        require(b.size() == 2, "second peek still returns all frames");
+        require(buf.size() == 2, "peek leaves buffer intact");
+        require(a.front()->data == b.front()->data, "peeked data matches");
+    }
+
     std::cout << "test_audio_buffer ok\n";
     return 0;
 }

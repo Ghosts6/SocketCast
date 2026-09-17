@@ -1,0 +1,20 @@
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: control-plane-scaledobject
+  namespace: socketcast
+spec:
+  scaleTargetRef:
+    name: control-plane
+  minReplicaCount: 1
+  maxReplicaCount: 5
+  triggers:
+    - type: prometheus
+      metadata:
+        serverAddress: http://prometheus.socketcast.svc.cluster.local:9090
+        query: socketcast_active_streams
+        threshold: "2"
+    - type: cpu
+      metricType: Utilization
+      metadata:
+        value: "70"

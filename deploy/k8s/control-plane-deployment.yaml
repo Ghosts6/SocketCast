@@ -14,11 +14,25 @@ spec:
       containers:
         - name: control-plane
           image: socketcast/control-plane:latest
+          imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 8000
           envFrom:
             - configMapRef:
                 name: control-plane-config
+          resources:
+            requests: { cpu: 100m, memory: 128Mi }
+            limits: { cpu: 500m, memory: 256Mi }
+          # Readiness uses /healthz (checks Redis too); liveness stays a plain
+          # TCP check — /healthz there would restart this pod on a Redis outage.
+          readinessProbe:
+            httpGet: { path: /healthz, port: 8000 }
+            initialDelaySeconds: 3
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket: { port: 8000 }
+            initialDelaySeconds: 5
+            periodSeconds: 10
 ---
 apiVersion: v1
 kind: Service

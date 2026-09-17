@@ -27,7 +27,12 @@ public:
                     uint32_t sample_rate, uint8_t channels);
 
     // Get all frames since last call. Clears buffer after reading.
+    // Prefer peek_all_frames() for /admin/audio serving — drain-on-read
+    // permanently silences late joiners / reconnects (audio is only dumped once).
     std::vector<std::shared_ptr<AudioFrame>> get_all_frames();
+
+    // Non-destructive read of every buffered frame (shared_ptrs into the buffer).
+    std::vector<std::shared_ptr<AudioFrame>> peek_all_frames() const;
 
     size_t size() const;
     size_t total_frames_added() const;

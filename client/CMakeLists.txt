@@ -7,7 +7,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 # Add engine as dependency (for packet, session, transport)
 add_subdirectory(../engine engine)
 
-# Optional SDL2 support (Phase 4+)
+# Optional SDL2 support
 find_package(SDL2 QUIET)
 if(SDL2_FOUND)
     message(STATUS "SDL2 found — building with video rendering support")

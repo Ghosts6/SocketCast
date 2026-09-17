@@ -1,5 +1,5 @@
 #!/bin/bash
-# Phase 4: end-to-end demo — server streams, native client receives and plays.
+# End-to-end demo — server streams, native client receives and plays.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -28,7 +28,7 @@ if [[ ! -x "$ENGINE" ]] || [[ ! -x "$CLIENT" ]]; then
     cmake --build "${ROOT}/client/build"
 fi
 
-echo "=== Phase 4 End-to-End Demo ==="
+echo "=== Native Client End-to-End Demo ==="
 echo "Starting server (streaming $INPUT)..."
 "$ENGINE" stream --host 127.0.0.1 --port "$PORT" --input "$INPUT" &
 SERVER_PID=$!
@@ -49,4 +49,4 @@ echo "Streaming in progress... (Ctrl+C to stop)"
 wait "$CLIENT_PID" 2>/dev/null || true
 
 echo ""
-echo "Phase 4 demo complete"
+echo "Demo complete"

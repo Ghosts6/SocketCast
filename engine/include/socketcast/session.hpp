@@ -1,6 +1,6 @@
 #pragma once
 // One 1:1 session. Handshake + selective-repeat, rate control, jitter buffering,
-// and Phase 3 media streaming.
+// and media streaming.
 
 #include "socketcast/jitter_buffer.hpp"
 #include "socketcast/media_sink.hpp"
@@ -38,7 +38,7 @@ public:
         uint64_t nacks_sent{0};
         uint64_t deadline_drops{0};
         uint64_t media_bytes_received{0};
-        // Phase 5b: metrics for control plane
+        // Metrics for control plane
         double rtt_ms{0.0};
         double jitter_ms{0.0};
         uint64_t frames_received{0};

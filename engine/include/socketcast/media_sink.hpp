@@ -1,5 +1,5 @@
 #pragma once
-// Reassemble received media payloads into an Annex B file (Phase 3).
+// Reassemble received media payloads into an Annex B file.
 
 #include <cstdint>
 #include <fstream>
