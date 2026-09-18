@@ -1,6 +1,6 @@
 # SocketCast API Reference
 
-**Status:** Complete — C++ engine, native client, and FastAPI control plane are all implemented.
+**Status:** Complete - C++ engine, native client, and FastAPI control plane are all implemented.
 
 ---
 
@@ -18,9 +18,9 @@
 
 SocketCast has three API surfaces:
 
-1. **C++ Core** — Transport, session, rate control, media
-2. **Native Client** — Playback via SDL2 or headless
-3. **FastAPI** — Session management, engine admin proxy, WebSocket bridge, metrics
+1. **C++ Core** - Transport, session, rate control, media
+2. **Native Client** - Playback via SDL2 or headless
+3. **FastAPI** - Session management, engine admin proxy, WebSocket bridge, metrics
 
 ---
 
@@ -483,30 +483,30 @@ return ret;
 
 Python service (`control-plane/`) that manages sessions, proxies engine admin commands, and bridges video/audio to the browser over WebSocket. Session and metrics state is Redis-backed (1hr TTL); CORS is open for all origins.
 
-### Sessions — `/api/sessions`
+### Sessions - `/api/sessions`
 
 | Method | Path | Purpose |
 |--------|------|---------|
 | GET | `/api/sessions/` | List all active sessions |
-| POST | `/api/sessions/` | Create a session (`{server, port}`) — returns a `session_id` and assigns a `stream_id` |
+| POST | `/api/sessions/` | Create a session (`{server, port}`) - returns a `session_id` and assigns a `stream_id` |
 | GET | `/api/sessions/{session_id}` | Get one session |
 | PUT | `/api/sessions/{session_id}` | Update session state (`handshaking`/`connected`/`disconnected`) |
 | DELETE | `/api/sessions/{session_id}` | Delete a session and its metrics |
 
-### Metrics — `/api/metrics`
+### Metrics - `/api/metrics`
 
 | Method | Path | Purpose |
 |--------|------|---------|
 | GET | `/api/metrics/{session_id}` | Read stored metrics (bitrate, loss, RTT, jitter) for a session |
 | POST | `/api/metrics/{session_id}` | Publish metrics for a session (used by `scripts/publish_metrics.py`) |
 
-### Admin (engine proxy) — `/api/admin`
+### Admin (engine proxy) - `/api/admin`
 
 Proxies to the C++ engine's own HTTP admin server (`engine_host:engine_control_port`).
 
 | Method | Path | Purpose |
 |--------|------|---------|
-| POST | `/api/admin/streams` | Start a stream on the engine (`{input, host, port, fps}`) — returns `stream_id`. Long timeout (60s): the engine may transcode via ffmpeg synchronously before responding |
+| POST | `/api/admin/streams` | Start a stream on the engine (`{input, host, port, fps}`) - returns `stream_id`. Long timeout (60s): the engine may transcode via ffmpeg synchronously before responding |
 | DELETE | `/api/admin/streams/{stream_id}` | Stop a stream on the engine |
 | GET | `/api/admin/streams/{stream_id}/stats` | Get stats for a running stream |
 
@@ -521,7 +521,7 @@ Proxies to the C++ engine's own HTTP admin server (`engine_host:engine_control_p
 
 | Method | Path | Purpose |
 |--------|------|---------|
-| GET | `/healthz` | Health check — 503 if Redis is unreachable |
+| GET | `/healthz` | Health check - 503 if Redis is unreachable |
 | GET | `/metrics` | Prometheus metrics in exposition format |
 
 ---
