@@ -58,22 +58,22 @@ All metric names use the `socketcast_` prefix. Types follow the [Prometheus metr
 
 | Metric | Type | Labels | Description |
 | --- | --- | --- | --- |
-| `socketcast_active_sessions` | Gauge | — | Sessions currently registered |
-| `socketcast_sessions_created_total` | Counter | — | Lifetime session creations |
+| `socketcast_active_sessions` | Gauge | - | Sessions currently registered |
+| `socketcast_sessions_created_total` | Counter | - | Lifetime session creations |
 
 ### Client metrics API
 
 | Metric | Type | Labels | Description |
 | --- | --- | --- | --- |
-| `socketcast_metrics_received_total` | Counter | — | Metrics payloads accepted via `POST /api/metrics/{session_id}` |
+| `socketcast_metrics_received_total` | Counter | - | Metrics payloads accepted via `POST /api/metrics/{session_id}` |
 
 ### Streams
 
 | Metric | Type | Labels | Description |
 | --- | --- | --- | --- |
-| `socketcast_active_streams` | Gauge | — | Streams currently active via admin API |
-| `socketcast_streams_created_total` | Counter | — | Lifetime stream starts |
-| `socketcast_frames_received_total` | Counter | — | Media frames forwarded to the dashboard |
+| `socketcast_active_streams` | Gauge | - | Streams currently active via admin API |
+| `socketcast_streams_created_total` | Counter | - | Lifetime stream starts |
+| `socketcast_frames_received_total` | Counter | - | Media frames forwarded to the dashboard |
 
 ### WebSockets
 
@@ -86,8 +86,8 @@ All metric names use the `socketcast_` prefix. Types follow the [Prometheus metr
 | Metric | Type | Labels | Description |
 | --- | --- | --- | --- |
 | `socketcast_errors_total` | Counter | `type` | Application errors by category |
-| `socketcast_redis_errors_total` | Counter | — | Redis connectivity failures |
-| `socketcast_engine_errors_total` | Counter | — | Engine admin / frame-fetch failures |
+| `socketcast_redis_errors_total` | Counter | - | Redis connectivity failures |
+| `socketcast_engine_errors_total` | Counter | - | Engine admin / frame-fetch failures |
 
 Example PromQL:
 
