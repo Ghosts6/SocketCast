@@ -25,10 +25,10 @@
 
 SocketCast is **not** TCP-like. It doesn't try to recover every packet. Instead:
 
-1. **Every packet carries its deadline** — when it's needed for playback
+1. **Every packet carries its deadline** - when it's needed for playback
 2. **Sender knows the cost** of loss vs. waiting for recovery
-3. **Receiver drops packets that arrive too late** — no point retransmitting them
-4. **Congestion is detected early** — RTT rise signals a building queue before loss hits
+3. **Receiver drops packets that arrive too late** - no point retransmitting them
+4. **Congestion is detected early** - RTT rise signals a building queue before loss hits
 
 This makes SocketCast suitable for **low-latency live streaming** under **lossy networks**.
 
