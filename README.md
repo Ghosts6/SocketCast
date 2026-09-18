@@ -316,7 +316,7 @@ Example:
 
 ## Demo
 
-**coming soon**
+[SocketCast.webm](https://github.com/user-attachments/assets/5c5e33b8-9648-41e1-b613-645698be67e7)
 
 ## License
 
