@@ -1,8 +1,8 @@
 # SocketCast Protocol (v1) - Detailed Specification
 
-**Version:** 1 (Frozen)  
+**Version:** 2 
 **Status:** Complete  
-**Date:** August 2026
+**Date:** Sep 2026
 
 ---
 
